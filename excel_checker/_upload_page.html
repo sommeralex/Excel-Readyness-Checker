@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel-Reifecheck</title>
+<style>
+  :root {
+    --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
+    --text: #1e293b; --muted: #64748b; --accent: #3b82f6;
+    --accent-hover: #2563eb; --green: #16a34a;
+  }
+  [data-theme="dark"] {
+    --bg: #0f172a; --card: #1e293b; --border: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #60a5fa;
+    --accent-hover: #93c5fd; --green: #4ade80;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 2rem;
+    transition: background 0.3s, color 0.3s;
+  }
+  .container { max-width: 640px; width: 100%; position: relative; }
+  .theme-toggle, .lang-toggle {
+    position: absolute;
+    top: -1.5rem;
+    width: 42px;
+    height: 42px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0;
+    cursor: pointer;
+    font-size: 1.15rem;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    font-weight: 600;
+  }
+  .theme-toggle { right: 0; }
+  .lang-toggle { right: 3rem; }
+  .theme-toggle:hover, .lang-toggle:hover { background: var(--border); }
+  .logo {
+    text-align: center; margin-bottom: 2rem;
+  }
+  .logo h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+  .logo p { color: var(--muted); font-size: 0.95rem; }
+  .drop-zone {
+    background: var(--card); border: 2px dashed var(--border);
+    border-radius: 16px; padding: 3rem 2rem; text-align: center;
+    cursor: pointer; transition: all 0.2s;
+    position: relative; overflow: hidden;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent); background: #eff6ff;
+  }
+  .drop-zone-bg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; opacity: 0.10; pointer-events: none;
+    z-index: 0;
+  }
+  .drop-zone:hover .drop-zone-bg { opacity: 0.15; }
+  .drop-zone-content { position: relative; z-index: 1; }
+  .drop-zone .icon { font-size: 3rem; margin-bottom: 1rem; }
+  .drop-zone h2 { font-size: 1.15rem; margin-bottom: 0.5rem; }
+  .drop-zone p { color: var(--muted); font-size: 0.9rem; }
+  .btn {
+    display: inline-block; margin-top: 1.5rem;
+    padding: 0.75rem 2rem; background: var(--accent);
+    color: white; border: none; border-radius: 8px;
+    font-size: 1rem; font-weight: 600; cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:disabled { background: var(--muted); cursor: not-allowed; }
+  .file-name {
+    margin-top: 1rem; padding: 0.5rem 1rem;
+    background: #f0fdf4; border: 1px solid #bbf7d0;
+    border-radius: 8px; color: var(--green);
+    font-weight: 600; display: none;
+  }
+  .file-name.visible { display: block; }
+  .progress {
+    margin-top: 1rem; display: none;
+  }
+  .progress.visible { display: block; }
+  .progress-bar {
+    height: 8px; background: var(--border); border-radius: 4px;
+    overflow: hidden; margin-bottom: 1rem;
+  }
+  .progress-bar-fill {
+    height: 100%; background: var(--accent); border-radius: 4px;
+    transition: width 0.3s ease;
+    width: 0%;
+  }
+  .progress-text {
+    text-align: center; margin-top: 0.5rem;
+    color: var(--muted); font-size: 0.85rem;
+  }
+  .progress-steps {
+    list-style: none; padding: 0; margin: 0.75rem 0 0;
+    max-height: 400px; overflow-y: auto;
+  }
+  .progress-steps li {
+    padding: 0.35rem 0.5rem; font-size: 0.82rem;
+    border-radius: 6px; margin-bottom: 0.25rem;
+    display: flex; align-items: center; gap: 0.5rem;
+    transition: background 0.2s;
+  }
+  .progress-steps li.active {
+    background: #eff6ff; color: var(--accent); font-weight: 600;
+  }
+  .progress-steps li.done { color: var(--green); }
+  .progress-steps li.error { color: #dc2626; }
+  .progress-steps li.queued { color: #cbd5e1; font-size: 0.78rem; }
+  .progress-steps li.queued .icon { font-size: 0.7rem; }
+  .progress-steps li .icon { width: 1.2rem; text-align: center; flex-shrink: 0; }
+  .progress-steps li .detail {
+    font-weight: 400; color: var(--muted); font-size: 0.78rem;
+    margin-left: auto;
+  }
+  .progress-pct {
+    text-align: center; font-size: 1.5rem; font-weight: 700;
+    color: var(--accent); margin-bottom: 0.5rem;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  .info {
+    margin-top: 2rem; padding: 1rem 1.25rem;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; font-size: 0.85rem; color: var(--muted);
+  }
+  .info h3 { color: var(--text); font-size: 0.9rem; margin-bottom: 0.5rem; }
+  .info ul { padding-left: 1.25rem; }
+  .info li { margin-bottom: 0.25rem; }
+
+  /* Feature Cards */
+  .feature-cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem; margin-top: 2rem;
+  }
+  .feature-card {
+    position: relative; padding: 1.5rem 1.25rem 3rem;
+    border-radius: 14px; border: 1px solid var(--border);
+    background: var(--card); text-decoration: none; color: var(--text);
+    display: flex; flex-direction: column; align-items: center; text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+  }
+  .feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+  }
+  .feature-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
+  }
+  .feature-card--report::before { background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+  .feature-card--learn::before { background: linear-gradient(90deg, #8b5cf6, #06b6d4); }
+  .feature-card--cost::before { background: linear-gradient(90deg, #f59e0b, #ef4444); }
+  .feature-card--rules::before { background: linear-gradient(90deg, #10b981, #3b82f6); }
+  .feature-card--rules .feature-card__cta { color: #059669; }
+  .feature-card__icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+  .feature-card__title {
+    font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; line-height: 1.3;
+  }
+  .feature-card__desc {
+    font-size: 0.82rem; color: var(--muted); line-height: 1.5; flex: 1;
+  }
+  .feature-card__cta {
+    position: absolute; bottom: 1rem;
+    font-size: 0.8rem; font-weight: 600; color: var(--accent);
+    transition: letter-spacing 0.15s;
+  }
+  .feature-card:hover .feature-card__cta { letter-spacing: 0.03em; }
+  .feature-card--cost .feature-card__cta { color: #d97706; }
+
+  .error {
+    margin-top: 1rem; padding: 0.75rem 1rem;
+    background: #fef2f2; border: 1px solid #fecaca;
+    border-radius: 8px; color: #dc2626;
+    display: none;
+  }
+  .error.visible { display: block; }
+  .why-details.visible { display: block !important; }
+  .divider {
+    display: flex; align-items: center; margin: 1.5rem 0;
+    color: var(--muted); font-size: 0.85rem;
+  }
+  .divider::before, .divider::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+  .divider span { padding: 0 1rem; }
+  .url-section {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 1.5rem 2rem;
+  }
+  .url-section h2 { font-size: 1rem; margin-bottom: 0.75rem; }
+  .url-input-group { display: flex; gap: 0.5rem; }
+  .url-input {
+    flex: 1; padding: 0.65rem 1rem; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 0.9rem; font-family: inherit;
+    outline: none; transition: border-color 0.2s;
+  }
+  .url-input:focus { border-color: var(--accent); }
+  .url-input::placeholder { color: #94a3b8; }
+  .btn-sm {
+    padding: 0.65rem 1.25rem; background: var(--accent);
+    color: white; border: none; border-radius: 8px;
+    font-size: 0.9rem; font-weight: 600; cursor: pointer;
+    transition: background 0.2s; white-space: nowrap;
+  }
+  .btn-sm:hover { background: var(--accent-hover); }
+  .btn-sm:disabled { background: var(--muted); cursor: not-allowed; }
+  .url-hint {
+    margin-top: 0.5rem; font-size: 0.8rem; color: var(--muted);
+  }
+  .tabs {
+    display: flex; gap: 0; margin-bottom: 0; border-bottom: 2px solid var(--border);
+  }
+  .tab {
+    padding: 0.6rem 1.25rem; cursor: pointer; font-size: 0.9rem;
+    font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: all 0.2s; background: none; border-top: none;
+    border-left: none; border-right: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-content { display: none; padding-top: 1.5rem; }
+  .tab-content.active { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <button class="lang-toggle" onclick="toggleLang()" title="Deutsch/English">🇩🇪</button>
+  <button class="theme-toggle" onclick="toggleTheme()" title="Dark/Light Mode">🌙</button>
+  <div class="logo">
+    <h1>⚡ Excel-Reifecheck</h1>
+    <p data-i18n="subtitle">Automatisierte Qualitätsprüfung für Excel-Dateien</p>
+    <p style="font-size:0.8rem; color:#94a3b8; margin-top:0.25rem;"> &middot; bereitgestellt von UCS - Digital Workplace Solutions</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('upload')" data-i18n="tab_upload">📁 Datei hochladen</button>
+    <button class="tab" onclick="switchTab('url')">🔗 SharePoint / URL</button>
+    <button class="tab" onclick="switchTab('settings')">⚙️ KI-Einstellungen</button>
+  </div>
+
+  <!-- TAB 1: File Upload -->
+  <div class="tab-content active" id="tab-upload">
+    <form id="uploadForm">
+      <div class="drop-zone" id="dropZone">
+        <input type="file" name="file" id="fileInput"
+               accept=".xlsx,.xlsm"
+               style="position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; z-index:2;">
+        <img src="/logo.png" alt="" class="drop-zone-bg">
+        <div class="drop-zone-content">
+          <div class="icon">📁</div>
+          <h2 data-i18n="drop_title">Excel-Datei hierher ziehen</h2>
+          <p data-i18n="drop_hint">oder klicken zum Auswählen &middot; .xlsx / .xlsm &middot; max. 100 MB</p>
+        </div>
+      </div>
+      <div class="file-name" id="fileName"></div>
+
+      <div class="error" id="errorMsg"></div>
+
+      <div style="text-align:center;">
+        <button type="submit" class="btn" id="submitBtn" disabled data-i18n="start_btn">
+          🔍 Health Check starten
+        </button>
+      </div>
+    </form>
+
+    <div class="progress" id="progress">
+      <div class="progress-pct" id="progressPct">0%</div>
+      <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">Analyse wird vorbereitet...</div>
+      <div class="progress-timer" id="progressTimer" style="text-align:center;font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;"></div>
+      <ul class="progress-steps" id="progressSteps"></ul>
+    </div>
+  </div>
+
+  <!-- TAB 2: URL Input -->
+  <div class="tab-content" id="tab-url">
+    <form id="urlForm">
+      <div class="url-section">
+        <h2>🔗 Excel per Link analysieren</h2>
+        <div class="url-input-group">
+          <input type="url" name="url" id="urlInput" class="url-input"
+                 placeholder="https://company.sharepoint.com/sites/.../file.xlsx"
+                 required>
+          <button type="submit" class="btn-sm" id="urlSubmitBtn">
+            🔍 Prüfen
+          </button>
+        </div>
+        <div class="url-hint">
+          <div style="background:#fff7ed; border:1px solid #fed7aa; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem; color:#9a3412;">
+            ⚠️ <strong>Hinweis:</strong> Diese Funktion ist aktuell innerhalb der APG nicht verfügbar.
+            Bitte nutze stattdessen den Datei-Upload.
+          </div>
+          Unterstützte Links:<br>
+          • SharePoint: <code>https://tenant.sharepoint.com/.../datei.xlsx</code><br>
+          • OneDrive: <code>https://tenant-my.sharepoint.com/.../datei.xlsx</code><br>
+          • Direkte Download-URLs zu .xlsx / .xlsm Dateien<br>
+          • SharePoint "Freigabe-Links" (Kopieren → Link kopieren)
+        </div>
+      </div>
+
+      <div class="error" id="urlErrorMsg"></div>
+    </form>
+
+    <div class="progress" id="urlProgress">
+      <div class="progress-pct" id="urlProgressPct">0%</div>
+      <div class="progress-bar"><div class="progress-bar-fill" id="urlProgressFill"></div></div>
+      <div class="progress-text" id="urlProgressText">Datei wird heruntergeladen...</div>
+      <ul class="progress-steps" id="urlProgressSteps"></ul>
+    </div>
+  </div>
+
+  <!-- TAB 3: KI-Einstellungen -->
+  <div class="tab-content" id="tab-settings">
+    <div class="url-section">
+      <h2>🤖 KI-Analyse Konfiguration</h2>
+      <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.25rem;">
+        Für die optionale KI-Analyse im Report wird ein Azure AI Foundry / Claude API Zugang benötigt.
+        Die Einstellungen werden im Browser gespeichert und nicht an den Server übertragen.
+      </p>
+
+      <div style="margin-bottom:1rem;">
+        <label style="font-size:0.85rem;font-weight:600;display:block;margin-bottom:0.25rem;">
+          🔗 Azure AI Endpoint-URL
+        </label>
+        <input type="url" id="settingsEndpoint" class="url-input" style="width:100%;"
+               placeholder="https://swedencentral.api.cognitive.microsoft.com/anthropic/v1/messages">
+        <div style="font-size:0.75rem;color:var(--muted);margin-top:0.25rem;">
+          Azure Cognitive Services Anthropic Endpoint. Wird aus <code>.env</code> vorgeladen, kann hier überschrieben werden.
+        </div>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label style="font-size:0.85rem;font-weight:600;display:block;margin-bottom:0.25rem;">
+          🔑 API-Key
+        </label>
+        <div style="display:flex;gap:0.5rem;">
+          <input type="password" id="settingsApiKey" class="url-input" style="flex:1;"
+                 placeholder="Wird aus .env geladen…">
+          <button onclick="toggleKeyVisibility()" class="btn-sm" id="toggleKeyBtn" style="min-width:auto;padding:0.5rem 0.75rem;">👁️</button>
+        </div>
+        <div id="settingsKeyHint" style="font-size:0.75rem;color:var(--muted);margin-top:0.25rem;"></div>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <label style="font-size:0.85rem;font-weight:600;display:block;margin-bottom:0.25rem;">
+          🧠 Modell
+        </label>
+        <select id="settingsModel" class="url-input" style="width:100%;">
+          <option value="claude-sonnet-4-5-2">Claude Sonnet 4.5 v2 (Standard)</option>
+          <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+          <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+          <option value="claude-3-haiku-20240307">Claude 3 Haiku (schnell & günstig)</option>
+        </select>
+      </div>
+
+      <div style="display:flex;gap:0.5rem;margin-top:1.25rem;">
+        <button onclick="testConnection()" class="btn-sm" id="testConnBtn">
+          🔌 Verbindung testen
+        </button>
+        <button onclick="saveSettings()" class="btn-sm" style="background:var(--green);">
+          💾 Einstellungen speichern
+        </button>
+        <button onclick="clearSettings()" class="btn-sm" style="background:#94a3b8;">
+          🗑️ Zurücksetzen
+        </button>
+      </div>
+
+      <div id="settingsStatus" style="margin-top:1rem;padding:0.75rem 1rem;border-radius:8px;display:none;font-size:0.9rem;"></div>
+    </div>
+  </div>
+
+  <div class="info" style="cursor:pointer;margin-top:2rem;" onclick="this.querySelector('.why-details').classList.toggle('visible')">
+    <h3 style="display:flex;align-items:center;justify-content:space-between;">
+      <span>🤖 Warum dieser Checker? Weil KI saubere Daten braucht!</span>
+      <span style="font-size:1.2rem;transition:transform 0.2s;" class="why-arrow">▸</span>
+    </h3>
+    <p style="color:var(--muted);font-size:0.85rem;margin-top:0.5rem;">
+      KI-Tools wie Copilot können grundsätzlich mit allen Daten arbeiten – aber je
+      <strong>sauberer und strukturierter</strong> die Daten, desto zuverlässiger und skalierbarer
+      sind die Ergebnisse. Komplexe Excel-Dateien mit Farbcodes, versteckten Sheets und
+      manuellen Formeln machen es der KI unnötig schwer.
+      Dieser Checker hilft dir, den Weg zu <strong>KI-tauglichen Daten</strong> zu starten.
+    </p>
+    <div class="why-details" style="display:none;margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;font-size:0.85rem;">
+        <div>
+          <strong>🎯 Das Ziel:</strong>
+          <ul style="padding-left:1rem;margin-top:0.25rem;color:var(--muted);">
+            <li>Weniger Excel, mehr Datenbanken</li>
+            <li>Saubere, maschinenlesbare Daten</li>
+            <li>KI kann Muster erkennen & helfen</li>
+            <li>Audit-fähige Prozesse</li>
+          </ul>
+        </div>
+        <div>
+          <strong>📋 Was du bekommst:</strong>
+          <ul style="padding-left:1rem;margin-top:0.25rem;color:var(--muted);">
+            <li>Bewertung (0-100)</li>
+            <li>Konkrete Verbesserungsvorschläge</li>
+            <li>Anti-Muster Erkennung</li>
+            <li>KI-gestützte Analyse (optional)</li>
+          </ul>
+        </div>
+      </div>
+      <div style="margin-top:1rem;padding:0.75rem;background:linear-gradient(135deg,#eff6ff,#faf5ff);border-radius:8px;border:1px solid #bfdbfe;font-size:0.85rem;">
+        <strong>💡 Merke:</strong> Jede Excel-Datei, die du in eine saubere Datenstruktur überführst,
+        ist ein konkreter Schritt in Richtung KI-Eignung – und macht die Zusammenarbeit sofort besser!
+      </div>
+    </div>
+  </div>
+
+  <div class="info">
+    <h3 data-i18n="info_title">Was wird geprüft?</h3>
+    <ul>
+      <li><strong>Struktur:</strong> Verbundene Zellen, Datentypen, Kopfzeilen, ID-Konsistenz</li>
+      <li><strong>Formeln:</strong> Volatile Funktionen, SVERWEIS-Ketten, Zirkelbezüge</li>
+      <li><strong>Volumen:</strong> Dateigröße, Zeilenanzahl, Formeldichte</li>
+      <li><strong>Implizites Wissen:</strong> Farbcodes ohne Legende, versteckte Blätter, Kommentare mit Geschäftslogik</li>
+    </ul>
+    <p style="margin-top:0.75rem;">
+      <strong data-i18n="privacy_label">Datenschutz:</strong> <span data-i18n="privacy_text">Die Datei wird nur lokal analysiert und danach sofort gelöscht.
+      Keine Daten verlassen diesen Server.</span>
+    </p>
+  </div>
+
+  <div class="feature-cards">
+    <a href="/" class="feature-card feature-card--report">
+      <div class="feature-card__icon">🩺</div>
+      <div class="feature-card__title">Health-Check Report</div>
+      <div class="feature-card__desc">Lade eine Excel-Datei hoch und erhalte eine detaillierte Analyse mit Score, Anti-Patterns und konkreten Empfehlungen.</div>
+      <span class="feature-card__cta">↑ Jetzt analysieren</span>
+    </a>
+    <a href="/learn" class="feature-card feature-card--learn">
+      <div class="feature-card__icon">📚</div>
+      <div class="feature-card__title" data-i18n="learn_link">Warum gehört Excel in eine Datenbank?</div>
+      <div class="feature-card__desc" data-i18n="learn_hint">Interaktive Erklärung mit Beispielen &amp; Quiz – lerne die wichtigsten Konzepte.</div>
+      <span class="feature-card__cta">Zur Lernseite →</span>
+    </a>
+    <a href="/learn#effizienz" class="feature-card feature-card--cost">
+      <div class="feature-card__icon">💰</div>
+      <div class="feature-card__title">Was kosten aufgeblähte Excel-Dateien?</div>
+      <div class="feature-card__desc">Kostenrechnung, KI-Readiness &amp; ungenutztes Automatisierungspotenzial auf einen Blick.</div>
+      <span class="feature-card__cta">Zur Effizienz-Analyse →</span>
+    </a>
+    <a href="/pruefregeln" class="feature-card feature-card--rules">
+      <div class="feature-card__icon">🔍</div>
+      <div class="feature-card__title">Was wird geprüft – und warum?</div>
+      <div class="feature-card__desc">26 Regeln in 4 Kategorien: Struktur, Formeln, Volumen &amp; implizites Wissen – für Teams und KI gleichermaßen wichtig.</div>
+      <span class="feature-card__cta">Zu den Prüfregeln →</span>
+    </a>
+  </div>
+</div>
+
+<script>
+// === Tab Switching ===
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector('.tab[onclick*="' + tab + '"]').classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+}
+
+// === Shared Progress Logic ===
+function startProgress(prefix) {
+  const els = {
+    progress: document.getElementById(prefix + 'Progress') || document.getElementById('progress'),
+    pct: document.getElementById(prefix + 'ProgressPct') || document.getElementById('progressPct'),
+    fill: document.getElementById(prefix + 'ProgressFill') || document.getElementById('progressFill'),
+    text: document.getElementById(prefix + 'ProgressText') || document.getElementById('progressText'),
+    steps: document.getElementById(prefix + 'ProgressSteps') || document.getElementById('progressSteps'),
+    timer: document.getElementById(prefix + 'ProgressTimer') || document.getElementById('progressTimer'),
+  };
+  els.progress.classList.add('visible');
+  els.steps.innerHTML = '';
+  els.pct.textContent = '0%';
+  els.fill.style.width = '0%';
+
+  // Laufzeit-Timer mit witzigen Kommentaren (DE + EN, zufällig pro Session)
+  const allComments = {
+    de: [
+      { after: 0, texts: [
+        '🔬 Analyse läuft – wir schauen uns das mal genau an!',
+        '📋 Excel wird durchleuchtet – einen Moment bitte…',
+        '🚀 Los geht\'s! Wir prüfen deine Datei…',
+      ]},
+      { after: 10, texts: [
+        '☕ Zeit für einen Kaffee…',
+        '☕ Perfekter Moment für einen Espresso!',
+        '🧐 Mal schauen was wir hier haben…',
+      ]},
+      { after: 20, texts: [
+        '🤔 Ui, das scheint ein kompliziertes Excel zu sein…',
+        '🤔 Wow, hier hat sich jemand richtig ausgetobt!',
+        '🧩 Da steckt mehr drin als gedacht…',
+      ]},
+      { after: 35, texts: [
+        '🗄️ Vielleicht wäre eine Datenbank doch keine schlechte Idee?',
+        '💡 Fun Fact: Eine SQL-Abfrage wäre jetzt schon fertig.',
+        '🏗️ Architektur-Tipp: Weniger Tabs, mehr Tabellen!',
+      ]},
+      { after: 50, texts: [
+        '📊 Fun Fact: Excel hat 1.048.576 Zeilen. Sind die alle befüllt?',
+        '📐 So viele Formeln… das verdient einen Doktortitel!',
+        '🧮 Diese Datei hat mehr Berechnungen als ein TI-84.',
+      ]},
+      { after: 70, texts: [
+        '🏗️ Dieses Excel hat vermutlich mehr Zeilen als manche Datenbank…',
+        '📦 Willkommen im Excel-Dschungel. Wir kämpfen uns durch!',
+        '🗺️ Wir bräuchten fast eine Landkarte für dieses Workbook.',
+      ]},
+      { after: 90, texts: [
+        '🧘 Geduld ist eine Tugend. Besonders bei Excel.',
+        '🧘 Ommmm… Excel-Meditation für Fortgeschrittene.',
+        '⏳ Gut Ding will Weile haben!',
+      ]},
+      { after: 120, texts: [
+        '🍕 Pizza bestellen? So lange dauert es vielleicht noch…',
+        '🍩 Donut-Pause? Wir machen weiter, versprochen!',
+        '🥤 Hol dir was zu trinken, wir sind fleißig.',
+      ]},
+      { after: 150, texts: [
+        '📖 Wusstest du? Die erste Excel-Version war von 1985. Manche Dateien fühlen sich auch so alt an.',
+        '📖 Fun Fact: "Excel" kommt von "excellent". Ob das für diese Datei gilt…?',
+        '🏛️ Dieses Excel ist älter als manche Datenbank bei APG.',
+      ]},
+      { after: 180, texts: [
+        '🚀 Tipp: Power BI kann solche Datenmengen in Sekunden laden!',
+        '🚀 Mit einer DB wäre das in 0,3 Sekunden erledigt. Nur so als Hinweis.',
+        '💨 SQL: SELECT * FROM excel_chaos – Fertig in 200ms.',
+      ]},
+      { after: 220, texts: [
+        '🏆 Respekt – du hast das größte Excel, das wir je gesehen haben!',
+        '🥇 Diese Datei kommt ins Hall of Fame der Excel-Monster!',
+        '📏 Neuer Rekord? Wir messen noch…',
+      ]},
+      { after: 260, texts: [
+        '🔮 Die Kristallkugel sagt: Diese Datei sollte eine Datenbank sein.',
+        '🔮 Ich sehe… Zeilen… sehr viele Zeilen… und eine Zukunft in PostgreSQL.',
+        '🎱 Magic 8-Ball sagt: "Outlook not so good" – für Excel, nicht für dich!',
+      ]},
+      { after: 300, texts: [
+        '🐌 Noch da? Wir auch. Versprochen.',
+        '🐢 Langsam aber sicher… wie eine Schildkröte im Datenregen.',
+        '🦥 Faultier-Modus? Nein – wir arbeiten hart im Hintergrund!',
+      ]},
+      { after: 360, texts: [
+        '🎬 Wenn das ein Film wäre, kämen jetzt die End-Credits.',
+        '🌅 Bei Sonnenaufgang angefangen, bei Sonnenuntergang fertig?',
+        '📞 Sollen wir den Excel-Notarzt rufen?',
+      ]},
+      { after: 420, texts: [
+        '🏅 Du verdienst eine Medaille fürs Durchhalten!',
+        '🎖️ Gedulds-Achievement freigeschaltet!',
+        '🫡 Deine Geduld ehrt dich. Wirklich.',
+      ]},
+    ],
+    en: [
+      { after: 0, texts: [
+        '🔬 Analysis running – let\'s take a closer look!',
+        '📋 Scanning your Excel – just a moment…',
+        '🚀 Here we go! Checking your file…',
+      ]},
+      { after: 10, texts: [
+        '☕ Time for a coffee…',
+        '☕ Perfect moment for an espresso!',
+        '🧐 Let\'s see what we\'ve got here…',
+      ]},
+      { after: 20, texts: [
+        '🤔 Wow, this seems like a complex spreadsheet…',
+        '🤔 Someone really went all out here!',
+        '🧩 There\'s more to this than meets the eye…',
+      ]},
+      { after: 35, texts: [
+        '🗄️ Maybe a database wouldn\'t be such a bad idea?',
+        '💡 Fun fact: A SQL query would be done by now.',
+        '🏗️ Architecture tip: Fewer tabs, more tables!',
+      ]},
+      { after: 50, texts: [
+        '📊 Fun fact: Excel has 1,048,576 rows. Are they all filled?',
+        '📐 So many formulas… this deserves a PhD!',
+        '🧮 This file has more calculations than a scientific calculator.',
+      ]},
+      { after: 70, texts: [
+        '🏗️ This Excel probably has more rows than some databases…',
+        '📦 Welcome to the Excel jungle. We\'re fighting through!',
+        '🗺️ We almost need a map for this workbook.',
+      ]},
+      { after: 90, texts: [
+        '🧘 Patience is a virtue. Especially with Excel.',
+        '🧘 Ommmm… Advanced Excel meditation.',
+        '⏳ Good things take time!',
+      ]},
+      { after: 120, texts: [
+        '🍕 Order a pizza? It might take that long…',
+        '🍩 Donut break? We\'ll keep working, promise!',
+        '🥤 Grab a drink, we\'re working hard.',
+      ]},
+      { after: 150, texts: [
+        '📖 Did you know? The first Excel version was from 1985. Some files feel that old.',
+        '📖 Fun fact: "Excel" means excellent. Whether that applies here…?',
+        '🏛️ This Excel is older than some databases at APG.',
+      ]},
+      { after: 180, texts: [
+        '🚀 Tip: Power BI can load this much data in seconds!',
+        '🚀 A database would handle this in 0.3 seconds. Just saying.',
+        '💨 SQL: SELECT * FROM excel_chaos – Done in 200ms.',
+      ]},
+      { after: 220, texts: [
+        '🏆 Respect – you have the biggest Excel we\'ve ever seen!',
+        '🥇 This file is going into the Excel Monster Hall of Fame!',
+        '📏 New record? Still measuring…',
+      ]},
+      { after: 260, texts: [
+        '🔮 The crystal ball says: This file should be a database.',
+        '🔮 I see… rows… many rows… and a future in PostgreSQL.',
+        '🎱 Magic 8-Ball says: "Outlook not so good" – for Excel, not for you!',
+      ]},
+      { after: 300, texts: [
+        '🐌 Still here? So are we. Promise.',
+        '🐢 Slow and steady… like a turtle in a data storm.',
+        '🦥 Sloth mode? No – we\'re working hard in the background!',
+      ]},
+      { after: 360, texts: [
+        '🎬 If this were a movie, the end credits would roll now.',
+        '🌅 Started at sunrise, finished at sunset?',
+        '📞 Should we call the Excel paramedics?',
+      ]},
+      { after: 420, texts: [
+        '🏅 You deserve a medal for your patience!',
+        '🎖️ Patience achievement unlocked!',
+        '🫡 Your patience is truly admirable.',
+      ]},
+    ],
+  };
+  const lang = (localStorage.getItem('lang') || 'de');
+  const pool = allComments[lang] || allComments.de;
+  // Zufällige Auswahl pro Schwelle (einmal pro Session)
+  const funnyComments = pool.map(entry => ({
+    after: entry.after,
+    text: entry.texts[Math.floor(Math.random() * entry.texts.length)],
+  }));
+  const startTime = Date.now();
+  let lastCommentIdx = -1;
+  els._timerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const min = Math.floor(elapsed / 60);
+    const sec = elapsed % 60;
+    if (els.timer) {
+      let timerText = '⏱ Laufzeit: ' + (min > 0 ? min + ' Min ' : '') + sec + ' Sek';
+      // Passenden Kommentar finden
+      for (let i = funnyComments.length - 1; i >= 0; i--) {
+        if (elapsed >= funnyComments[i].after) {
+          timerText += '  ·  ' + funnyComments[i].text;
+          break;
+        }
+      }
+      els.timer.textContent = timerText;
+    }
+  }, 1000);
+
+  return els;
+}
+
+function stopTimer(els) {
+  if (els._timerInterval) clearInterval(els._timerInterval);
+}
+
+function handleSSE(sessionId, els) {
+  return new Promise((resolve, reject) => {
+    const source = new EventSource('/progress/' + sessionId);
+    let lastLi = null;
+
+    source.addEventListener('progress', (e) => {
+      const data = JSON.parse(e.data);
+
+      // Prozent aktualisieren
+      els.pct.textContent = data.pct + '%';
+      els.fill.style.width = data.pct + '%';
+      els.text.textContent = data.step;
+
+      // Vorheriges Element als "done" markieren
+      if (lastLi && data.status !== 'error') {
+        lastLi.className = 'done';
+        lastLi.querySelector('.icon').innerHTML = '✅';
+      }
+
+      // Neues Element hinzufügen
+      const li = document.createElement('li');
+      li.className = data.status === 'done' ? 'done' : (data.status === 'error' ? 'error' : 'active');
+      const icon = data.status === 'done' ? '✅' : (data.status === 'error' ? '❌' : '<span class="spinner"></span>');
+      li.innerHTML = '<span class="icon">' + icon + '</span>' +
+                     '<span>' + data.step + '</span>' +
+                     (data.detail ? '<span class="detail">' + data.detail + '</span>' : '');
+      els.steps.appendChild(li);
+      lastLi = li;
+
+      // Queued-Schritte anzeigen (anstehende Regeln)
+      if (data.queue) {
+        // Bestehende queued-Items entfernen
+        els.steps.querySelectorAll('.queued').forEach(el => el.remove());
+        // Queue reversed durchlaufen, damit neue oben stehen
+        for (let i = data.queue.length - 1; i >= 0; i--) {
+          let name = data.queue[i];
+          // Robust gegen undefined/null/leer
+          const displayName = (typeof name === 'string' && name && name !== 'undefined') ? name : 'Unbenannte Regel';
+          const qli = document.createElement('li');
+          qli.className = 'queued';
+          qli.innerHTML = '<span class="icon">⏳</span><span>' + displayName + '</span>';
+          // Neue Items oben einfügen
+          if (els.steps.firstChild) {
+            els.steps.insertBefore(qli, els.steps.firstChild);
+          } else {
+            els.steps.appendChild(qli);
+          }
+        }
+      }
+
+      // Bei neuen aktiven Schritten das passende queued-Item entfernen
+      if (data.status !== 'done') {
+        els.steps.querySelectorAll('.queued').forEach(qli => {
+          if (qli.textContent.includes(data.step.replace('🔍 ', '').replace('⚠️ ', ''))) {
+            qli.remove();
+          }
+        });
+      }
+
+      els.steps.scrollTop = els.steps.scrollHeight;
+
+      if (data.status === 'done') {
+        // Fertig: letzte Zeile grün
+        li.querySelector('.icon').innerHTML = '🎉';
+        els.steps.querySelectorAll('.queued').forEach(el => el.remove());
+      }
+    });
+
+    source.addEventListener('report', (e) => {
+      source.close();
+      stopTimer(els);
+      const data = JSON.parse(e.data);
+      resolve(data.report_id);
+    });
+
+    source.addEventListener('error_msg', (e) => {
+      source.close();
+      stopTimer(els);
+      reject(new Error(JSON.parse(e.data).message));
+    });
+
+    source.onerror = () => {
+      // EventSource reconnects automatisch – erst nach 5 Minuten aufgeben
+      if (!source._errorStart) source._errorStart = Date.now();
+      if (Date.now() - source._errorStart > 300000) {
+        source.close();
+        reject(new Error('Verbindung zum Server verloren.'));
+      }
+    };
+  });
+}
+
+// === File Upload ===
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const fileName = document.getElementById('fileName');
+const submitBtn = document.getElementById('submitBtn');
+const errorMsg = document.getElementById('errorMsg');
+const form = document.getElementById('uploadForm');
+
+function showFile(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['xlsx', 'xlsm'].includes(ext)) {
+    errorMsg.textContent = 'Nur .xlsx und .xlsm Dateien werden unterstützt.';
+    errorMsg.classList.add('visible');
+    submitBtn.disabled = true;
+    return;
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    errorMsg.textContent = 'Datei ist größer als 100 MB.';
+    errorMsg.classList.add('visible');
+    submitBtn.disabled = true;
+    return;
+  }
+  errorMsg.classList.remove('visible');
+  const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  fileName.textContent = '✅ ' + file.name + ' (' + sizeMB + ' MB)';
+  fileName.classList.add('visible');
+  submitBtn.disabled = false;
+}
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files[0]) showFile(fileInput.files[0]);
+});
+
+// Reset UI when page is restored from bfcache (browser back button)
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = '🔍 Health Check starten';
+    dropZone.style.display = '';
+    fileName.classList.remove('visible');
+    errorMsg.classList.remove('visible');
+    document.getElementById('progress').classList.remove('visible');
+    fileInput.value = '';
+  }
+});
+
+dropZone.addEventListener('dragover', (e) => {
+  e.preventDefault(); dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files.length) {
+    fileInput.files = e.dataTransfer.files;
+    showFile(e.dataTransfer.files[0]);
+  }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!fileInput.files[0]) return;
+  submitBtn.disabled = true;
+  submitBtn.textContent = '⏳ Wird hochgeladen...';
+  dropZone.style.display = 'none';
+
+  const els = startProgress('');
+
+  // 1. Upload per AJAX
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  try {
+    const resp = await fetch('/upload', { method: 'POST', body: formData });
+    const result = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(result.error || 'Upload fehlgeschlagen');
+    }
+
+    // 2. SSE Progress starten
+    const reportId = await handleSSE(result.session_id, els);
+
+    // 3. Buttons für Anzeigen und Download anzeigen
+    const progressDiv = document.getElementById('progress');
+    let showBtn = document.getElementById('showReportBtn');
+    let downloadBtn = document.getElementById('downloadReportBtn');
+    if (!showBtn) {
+      showBtn = document.createElement('button');
+      showBtn.id = 'showReportBtn';
+      showBtn.className = 'btn';
+      showBtn.style.marginTop = '1.5rem';
+      showBtn.textContent = '➡️ Report anzeigen';
+      showBtn.onclick = () => {
+        window.open('/report/' + reportId, '_blank');
+      };
+      progressDiv.appendChild(showBtn);
+    } else {
+      showBtn.style.display = '';
+      showBtn.onclick = () => {
+        window.open('/report/' + reportId, '_blank');
+      };
+    }
+    if (!downloadBtn) {
+      downloadBtn = document.createElement('button');
+      downloadBtn.id = 'downloadReportBtn';
+      downloadBtn.className = 'btn';
+      downloadBtn.style.marginTop = '1.5rem';
+      downloadBtn.style.marginLeft = '1rem';
+      downloadBtn.textContent = '⬇️ Report herunterladen';
+      downloadBtn.onclick = () => {
+        window.open('/download-report/' + reportId, '_blank');
+      };
+      progressDiv.appendChild(downloadBtn);
+    } else {
+      downloadBtn.style.display = '';
+      downloadBtn.onclick = () => {
+        window.open('/download-report/' + reportId, '_blank');
+      };
+    }
+    // Erfolgsmeldung anzeigen
+    els.text.textContent = '✅ Regelprüfung abgeschlossen. Sie können jetzt den Report anzeigen oder herunterladen.';
+    submitBtn.textContent = '🔍 Health Check starten';
+    // UI zurücksetzen für neuen Upload
+    setTimeout(() => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '🔍 Health Check starten';
+      dropZone.style.display = '';
+      fileName.classList.remove('visible');
+      errorMsg.classList.remove('visible');
+      document.getElementById('progress').classList.remove('visible');
+      fileInput.value = '';
+      if (showBtn) showBtn.style.display = 'none';
+      if (downloadBtn) downloadBtn.style.display = 'none';
+    }, 3000);
+  } catch (err) {
+    errorMsg.textContent = err.message;
+    errorMsg.classList.add('visible');
+    submitBtn.disabled = false;
+    submitBtn.textContent = '🔍 Health Check starten';
+    dropZone.style.display = '';
+    document.getElementById('progress').classList.remove('visible');
+  }
+});
+
+// === URL Form ===
+const urlForm = document.getElementById('urlForm');
+const urlSubmitBtn = document.getElementById('urlSubmitBtn');
+const urlErrorMsg = document.getElementById('urlErrorMsg');
+const urlInput = document.getElementById('urlInput');
+
+urlForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const url = urlInput.value.trim();
+  if (!url) return;
+
+  urlSubmitBtn.disabled = true;
+  urlSubmitBtn.textContent = '⏳';
+  urlErrorMsg.classList.remove('visible');
+
+  const els = startProgress('url');
+
+  try {
+    // 1. URL an Server senden
+    const resp = await fetch('/upload-url', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url }),
+    });
+    const result = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(result.error || 'URL-Verarbeitung fehlgeschlagen');
+    }
+
+    // 2. SSE Progress
+    const reportId = await handleSSE(result.session_id, els);
+
+    // 3. Report
+    window.location.href = '/report/' + reportId;
+  } catch (err) {
+    urlErrorMsg.textContent = err.message;
+    urlErrorMsg.classList.add('visible');
+    urlSubmitBtn.disabled = false;
+    urlSubmitBtn.textContent = '🔍 Prüfen';
+    document.getElementById('urlProgress').classList.remove('visible');
+  }
+});
+
+// ── Dark/Light Mode ──
+function toggleTheme() {
+  const html = document.documentElement;
+  const btn = document.querySelector('.theme-toggle');
+  if (html.getAttribute('data-theme') === 'dark') {
+    html.removeAttribute('data-theme');
+    btn.textContent = '🌙';
+    localStorage.setItem('theme', 'light');
+  } else {
+    html.setAttribute('data-theme', 'dark');
+    btn.textContent = '☀️';
+    localStorage.setItem('theme', 'dark');
+  }
+}
+// Restore saved theme
+(function() {
+  if (localStorage.getItem('theme') === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    const btn = document.querySelector('.theme-toggle');
+    if (btn) btn.textContent = '☀️';
+  }
+})();
+
+// ── DE/EN Language Toggle ──
+const i18n = {
+  en: {
+    subtitle: 'Automated quality check for Excel files',
+    tab_upload: '📁 Upload file',
+    drop_title: 'Drag Excel file here',
+    drop_hint: 'or click to browse · .xlsx / .xlsm · max. 100 MB',
+    start_btn: '🔍 Start Health Check',
+    info_title: 'What gets checked?',
+    privacy_label: 'Privacy:',
+    privacy_text: 'The file is analyzed locally only and deleted immediately after. No data leaves this server.',
+    learn_link: 'Why does complex Excel belong in a database?',
+    learn_hint: 'Interactive explanation with examples & quiz.',
+  },
+  de: {
+    subtitle: 'Automatisierte Qualitätsprüfung für Excel-Dateien',
+    tab_upload: '📁 Datei hochladen',
+    drop_title: 'Excel-Datei hierher ziehen',
+    drop_hint: 'oder klicken zum Auswählen · .xlsx / .xlsm · max. 100 MB',
+    start_btn: '🔍 Health Check starten',
+    info_title: 'Was wird geprüft?',
+    privacy_label: 'Datenschutz:',
+    privacy_text: 'Die Datei wird nur lokal analysiert und danach sofort gelöscht. Keine Daten verlassen diesen Server.',
+    learn_link: 'Warum gehört komplexes Excel in eine Datenbank?',
+    learn_hint: 'Interaktive Erklärung mit Beispielen & Quiz.',
+  }
+};
+
+function toggleLang() {
+  const current = localStorage.getItem('lang') || 'de';
+  const next = current === 'de' ? 'en' : 'de';
+  localStorage.setItem('lang', next);
+  applyLang(next);
+}
+
+function applyLang(lang) {
+  const btn = document.querySelector('.lang-toggle');
+  btn.textContent = lang === 'de' ? '🇩🇪' : '🇬🇧';
+  document.documentElement.lang = lang;
+  const strings = i18n[lang] || i18n.de;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (strings[key]) el.textContent = strings[key];
+  });
+}
+(function() {
+  const lang = localStorage.getItem('lang') || 'de';
+  if (lang !== 'de') applyLang(lang);
+})();
+
+// ── KI-Einstellungen ──
+(function loadSettings() {
+  const endpoint = localStorage.getItem('llm_endpoint') || '';
+  const apiKey = localStorage.getItem('llm_api_key') || '';
+  const model = localStorage.getItem('llm_model') || '';
+  if (endpoint) document.getElementById('settingsEndpoint').value = endpoint;
+  if (apiKey) document.getElementById('settingsApiKey').value = apiKey;
+  if (model) {
+    const sel = document.getElementById('settingsModel');
+    if (sel) sel.value = model;
+  }
+  // Load .env defaults hint
+  fetch('/api/llm-config').then(r => r.json()).then(cfg => {
+    const hint = document.getElementById('settingsKeyHint');
+    if (cfg.has_key && !apiKey) {
+      hint.textContent = '🔑 Aus .env vorgeladen: ' + cfg.masked_key;
+      document.getElementById('settingsApiKey').placeholder = cfg.masked_key + ' (aus .env)';
+    }
+    // Pre-fill endpoint from .env if not overridden in localStorage
+    if (cfg.endpoint && !endpoint) {
+      document.getElementById('settingsEndpoint').value = cfg.endpoint;
+    }
+    // Pre-fill model from .env
+    if (cfg.model && !model) {
+      const sel = document.getElementById('settingsModel');
+      // Check if model exists as option, if not add it
+      let found = false;
+      for (const opt of sel.options) { if (opt.value === cfg.model) { found = true; break; } }
+      if (!found) {
+        const opt = document.createElement('option');
+        opt.value = cfg.model; opt.textContent = cfg.model + ' (aus .env)';
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      sel.value = cfg.model;
+    }
+  }).catch(() => {});
+})();
+
+function toggleKeyVisibility() {
+  const input = document.getElementById('settingsApiKey');
+  const btn = document.getElementById('toggleKeyBtn');
+  if (input.type === 'password') {
+    input.type = 'text'; btn.textContent = '🔒';
+  } else {
+    input.type = 'password'; btn.textContent = '👁️';
+  }
+}
+
+function saveSettings() {
+  const endpoint = document.getElementById('settingsEndpoint').value.trim();
+  const apiKey = document.getElementById('settingsApiKey').value.trim();
+  const model = document.getElementById('settingsModel').value;
+  localStorage.setItem('llm_endpoint', endpoint);
+  if (apiKey) localStorage.setItem('llm_api_key', apiKey);
+  localStorage.setItem('llm_model', model);
+  showStatus('settingsStatus', '💾 Einstellungen gespeichert!', 'success');
+}
+
+function clearSettings() {
+  localStorage.removeItem('llm_endpoint');
+  localStorage.removeItem('llm_api_key');
+  localStorage.removeItem('llm_model');
+  document.getElementById('settingsEndpoint').value = '';
+  document.getElementById('settingsApiKey').value = '';
+  document.getElementById('settingsModel').selectedIndex = 0;
+  showStatus('settingsStatus', '🗑️ Einstellungen zurückgesetzt.', 'info');
+}
+
+function testConnection() {
+  const btn = document.getElementById('testConnBtn');
+  const endpoint = document.getElementById('settingsEndpoint').value.trim();
+  const apiKey = document.getElementById('settingsApiKey').value.trim();
+  btn.disabled = true;
+  btn.textContent = '⏳ Teste…';
+  showStatus('settingsStatus', '🔌 Verbindung wird getestet…', 'info');
+
+  const body = {};
+  if (apiKey) body.api_key = apiKey;
+  if (endpoint) body.endpoint = endpoint;
+
+  fetch('/api/llm-test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      showStatus('settingsStatus', '✅ ' + data.message, 'success');
+    } else {
+      showStatus('settingsStatus', '❌ ' + data.message, 'error');
+    }
+  }).catch(err => {
+    showStatus('settingsStatus', '❌ Netzwerkfehler: ' + err.message, 'error');
+  }).finally(() => {
+    btn.disabled = false;
+    btn.textContent = '🔌 Verbindung testen';
+  });
+}
+
+function showStatus(id, text, type) {
+  const el = document.getElementById(id);
+  el.style.display = 'block';
+  el.textContent = text;
+  if (type === 'success') {
+    el.style.background = '#f0fdf4'; el.style.color = '#15803d'; el.style.border = '1px solid #bbf7d0';
+  } else if (type === 'error') {
+    el.style.background = '#fef2f2'; el.style.color = '#b91c1c'; el.style.border = '1px solid #fecaca';
+  } else {
+    el.style.background = '#eff6ff'; el.style.color = '#1e40af'; el.style.border = '1px solid #bfdbfe';
+  }
+}
+</script>
+</body>
+</html>

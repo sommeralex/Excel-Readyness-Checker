@@ -1,0 +1,21 @@
+[project]
+name = "excel-reifecheck"
+version = "0.1.0"
+description = "Datenreife-Check für Excel – der erste Schritt Richtung AI-Readiness"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "flask>=3.0",
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+excel-reifecheck = "excel_checker.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["excel_checker*"]

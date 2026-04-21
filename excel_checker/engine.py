@@ -1,0 +1,562 @@
+"""Haupt-Engine: Lädt Excel, führt Regeln aus, generiert Bericht."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from typing import Callable, Generator, List, Optional, Tuple
+
+import openpyxl
+
+from excel_checker.i18n import _
+from excel_checker.models import SheetStats, WorkbookReport
+from excel_checker.recommendations import generate_recommendations
+from excel_checker.rules import ALL_RULES, BaseRule
+
+# Excel physische Limits – Dimensionen an diesen Werten = Phantom-Ausdehnung
+EXCEL_MAX_ROW = 1_048_576  # 2^20
+EXCEL_MAX_COL = 16_384     # 2^14
+_EMPTY_RUN_EXIT = 200      # Nach N leeren Zeilen → Datenende
+
+# Schwelle ab der wir max_row/max_col als "aufgebläht" betrachten und
+# per Fuzzy-Scan die echte Datengrenze suchen statt blindem Hochrechnen.
+_SUSPICIOUS_ROW_THRESHOLD = 5_000   # > 5000 gemeldete Zeilen → prüfen
+_SUSPICIOUS_COL_THRESHOLD = 200     # > 200 gemeldete Spalten → prüfen
+
+
+# ── Fuzzy-Scan: Schnelles Auffinden der echten Datengrenzen ──────────
+
+def _row_has_data(ws, row_idx: int, max_col: int) -> bool:
+    """Prüft ob eine Zeile in den ersten max_col Spalten Daten enthält."""
+    for col_idx in range(1, min(max_col, 100) + 1):
+        if ws.cell(row=row_idx, column=col_idx).value is not None:
+            return True
+    return False
+
+
+def _find_last_data_row(ws, max_row: int, check_cols: int) -> int:
+    """Findet die letzte befüllte Zeile per Fuzzy-Binärsuche.
+
+    Strategie:
+    1. Erste 100 Zeilen linear prüfen (Header + Datenanfang)
+    2. Ab Zeile 100 in exponentiell wachsenden Schritten vorspringen
+    3. Wenn leer: per Binärsuche die exakte Grenze zwischen letztem
+       Sprung mit Daten und erstem Sprung ohne Daten finden
+    4. Von der gefundenen Grenze noch 50 Zeilen linear zurücklaufen
+       um vereinzelte leere Zeilen am Ende nicht mitzuzählen
+    """
+    check_cols = min(check_cols, 100)
+
+    # Phase 1: Erste 100 Zeilen linear
+    last_found = 0
+    linear_end = min(100, max_row)
+    for r in range(1, linear_end + 1):
+        if _row_has_data(ws, r, check_cols):
+            last_found = r
+
+    if max_row <= linear_end:
+        return last_found
+
+    # Phase 2: Exponentielle Sprünge (200, 400, 800, 1600, ...)
+    prev_pos = linear_end
+    step = 200
+    probe_pos = linear_end + step
+    last_data_probe = last_found  # Letzte Probe-Position MIT Daten
+
+    while probe_pos <= max_row:
+        if _row_has_data(ws, probe_pos, check_cols):
+            last_data_probe = probe_pos
+            prev_pos = probe_pos
+            step = min(step * 2, 10_000)  # Cap bei 10k Schritten
+            probe_pos += step
+        else:
+            # Erste leere Probe gefunden → Binärsuche zwischen prev_pos und probe_pos
+            break
+    else:
+        # Nie eine leere Probe gefunden → Daten gehen bis max_row
+        # Trotzdem: letzten Bereich linear prüfen
+        probe_pos = max_row
+
+    # Phase 3: Binärsuche zwischen last_data_probe und probe_pos
+    lo, hi = last_data_probe, min(probe_pos, max_row)
+    while hi - lo > 50:
+        mid = (lo + hi) // 2
+        if _row_has_data(ws, mid, check_cols):
+            lo = mid
+        else:
+            hi = mid
+
+    # Phase 4: Linear vom hi-Punkt zurücklaufen für exakte Grenze
+    last_real = lo
+    for r in range(lo, min(hi + 1, max_row + 1)):
+        if _row_has_data(ws, r, check_cols):
+            last_real = r
+
+    return last_real
+
+
+def _find_last_data_col(ws, max_col: int, sample_rows: int) -> int:
+    """Findet die letzte befüllte Spalte per Stichprobe der ersten N Zeilen.
+
+    Strategie: Die Spaltenbreite ist fast immer in den ersten Zeilen
+    (Header) erkennbar. Wir prüfen die ersten sample_rows Zeilen und
+    finden die am weitesten rechts befüllte Spalte.
+    """
+    check_rows = min(sample_rows, 50)
+    last_col = 0
+
+    # Linear durch die ersten Zeilen, aber exponentiell durch die Spalten
+    for r in range(1, check_rows + 1):
+        # Erst die bekannten benutzten Spalten prüfen
+        for c in range(1, min(last_col + 20, max_col + 1)):
+            if ws.cell(row=r, column=c).value is not None:
+                last_col = max(last_col, c)
+        # Dann exponentiell weiter suchen
+        probe_c = last_col + 20
+        while probe_c <= max_col:
+            if ws.cell(row=r, column=probe_c).value is not None:
+                last_col = max(last_col, probe_c)
+                probe_c += 10
+            else:
+                break
+            probe_c *= 2
+
+    return last_col
+
+
+def _count_cells_sampled(ws, real_rows: int, real_cols: int) -> tuple[int, int]:
+    """Zählt Formeln und statische Zellen per repräsentativer Stichprobe.
+
+    Strategie: Erste 100 Zeilen vollständig + danach jede 50ste Zeile.
+    Hochrechnung basiert auf dem tatsächlichen Datenbereich.
+    """
+    formula_count = 0
+    static_count = 0
+    sampled_rows = 0
+
+    for row_idx in range(1, real_rows + 1):
+        # Erste 100 Zeilen immer, danach jede 50ste
+        if row_idx > 100 and (row_idx % 50) != 0:
+            continue
+        sampled_rows += 1
+        for col_idx in range(1, real_cols + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if cell.value is None:
+                continue
+            if cell.data_type == 'f':
+                formula_count += 1
+            else:
+                static_count += 1
+
+    # Hochrechnung: sampled_rows zu real_rows
+    if sampled_rows > 0 and sampled_rows < real_rows:
+        factor = real_rows / sampled_rows
+        formula_count = int(formula_count * factor)
+        static_count = int(static_count * factor)
+
+    return formula_count, static_count
+
+
+# Typ für Progress-Callbacks
+ProgressEvent = dict  # {"step": str, "detail": str, "pct": int, "status": "running"|"done"|"error"}
+
+
+def _compute_db_readiness(stats: SheetStats, findings: list) -> int:
+    """Berechnet wie gut ein Sheet in eine Datenbank überführbar wäre (0-100)."""
+    score = 100
+    name = stats.name
+    rules_found = {f.rule_id for f in findings if f.sheet == name}
+
+    # Penalty pro erkanntem Strukturproblem
+    if 'STR-006' in rules_found: score -= 25   # Kein Primärschlüssel
+    if 'STR-003' in rules_found: score -= 20   # Keine Kopfzeile
+    if 'STR-001' in rules_found: score -= 15   # Merged Cells
+    if 'STR-002' in rules_found: score -= 10   # Gemischte Datentypen
+    if 'STR-005' in rules_found: score -= 10   # Inkonsistente IDs
+    if 'STR-007' in rules_found: score -= 10   # Freitext-IDs
+    if 'STR-004' in rules_found: score -= 5    # Leerzeilen-Gaps
+    if 'FRM-004' in rules_found: score -= 15   # Zirkelbezüge
+    if 'FRM-005' in rules_found: score -= 5    # Externe Verknüpfungen
+
+    # Merged Cells auch ohne Finding berücksichtigen (Light-Modus)
+    if stats.merged_regions > 0 and 'STR-001' not in rules_found:
+        score -= min(15, stats.merged_regions * 3)
+
+    # Sehr kleine Sheets (Konfiguration/Lookup) – schwer bewertbar
+    if stats.row_count < 3:
+        score = min(score, 50)
+
+    # Formel-dominante Sheets sind Berechnungs-Sheets, nicht Datenspeicher
+    total_cells = stats.formula_count + stats.static_count
+    if total_cells > 0 and stats.formula_count / total_cells > 0.7:
+        score -= 10
+
+    return max(0, min(100, score))
+
+
+def analyze(
+    file_path: str,
+    rules: Optional[List[type[BaseRule]]] = None,
+) -> WorkbookReport:
+    """Analysiert eine Excel-Datei und gibt einen vollständigen Report zurück."""
+    # Wrapper um analyze_with_progress, ignoriert Events
+    report = None
+    for event_or_report in analyze_with_progress(file_path, rules):
+        if isinstance(event_or_report, WorkbookReport):
+            report = event_or_report
+    return report
+
+
+import threading
+import traceback
+
+def analyze_with_progress(
+    file_path: str,
+    rules: Optional[List[type[BaseRule]]] = None,
+    rule_timeout_sec: int = 30,
+    progress_callback: Optional[Callable[[dict], None]] = None,
+) -> Generator[ProgressEvent | WorkbookReport, None, None]:
+    """Analysiert eine Excel-Datei und yielded Progress-Events.
+
+    Das letzte yield ist der fertige WorkbookReport.
+    """
+    if rules is None:
+        rules = ALL_RULES
+
+    total_steps = len(rules) + 3  # +3 für: Laden, Sheet-Stats, Empfehlungen
+    current_step = 0
+
+    def progress(step: str, detail: str = "", status: str = "running") -> ProgressEvent:
+        nonlocal current_step
+        current_step += 1
+        pct = min(100, int(current_step / total_steps * 100))
+        return {
+            "step": step, "detail": detail,
+            "pct": pct, "status": status,
+            "current": current_step, "total": total_steps,
+        }
+
+    def sub_progress(step: str, detail: str = "") -> ProgressEvent:
+        """Progress-Update ohne Step-Counter zu erhöhen (für Zwischenstatus)."""
+        pct = min(100, int(current_step / total_steps * 100))
+        return {
+            "step": step, "detail": detail,
+            "pct": pct, "status": "running",
+            "current": current_step, "total": total_steps,
+        }
+
+    file_path = os.path.abspath(file_path)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(_("engine.file_not_found", path=file_path))
+
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    size_str = f"{file_size_mb:.1f} MB" if file_size_mb >= 0.1 else f"{file_size_mb * 1024:.0f} KB"
+
+    # Bei großen Dateien (>15 MB): Light-Modus ohne zellenbasierte Regeln
+    large_file = file_size_mb > 15
+    active_rules = [] if large_file else rules
+
+    total_steps = len(active_rules) + 3  # Laden, Stats, Empfehlungen
+
+    # Vorschau der anstehenden Schritte senden
+    queue_items = [_("engine.stats_queue")]
+    if large_file:
+        queue_items.append(_("engine.volume_light_queue"))
+    else:
+        rule_names = []
+        for rule_cls in active_rules:
+            try:
+                name = rule_cls().rule_name
+            except Exception as e:
+                name = f"[Fehler: {e}]"
+            print(f"[DEBUG] Regel-Name für {rule_cls.__name__}: {repr(name)}")
+            rule_names.append(name)
+        queue_items += [_("engine.rule_queue", name=name) for name in rule_names]
+    queue_items.append(_("engine.recs_queue"))
+
+    mode_hint = _("engine.light_hint") if large_file else ""
+    yield {
+        "step": _("engine.loading", mode=mode_hint),
+        "detail": _("engine.loading_detail", size=size_str),
+        "pct": 0, "status": "running",
+        "current": 0, "total": total_steps,
+        "queue": queue_items,
+    }
+
+    # === Schritt 1: Datei laden ===
+    if large_file:
+        wb = openpyxl.load_workbook(file_path, data_only=False, read_only=True)
+    else:
+        wb = openpyxl.load_workbook(file_path, data_only=False, read_only=False)
+    current_step = 1
+
+    report = WorkbookReport(
+        file_path=file_path,
+        file_size_mb=file_size_mb,
+        sheet_count=len(wb.sheetnames),
+    )
+
+    # === Schritt 2: Sheet-Statistiken ===
+    sheet_names = wb.sheetnames
+    names_str = ', '.join(sheet_names[:5]) + ('...' if len(sheet_names) > 5 else '')
+    yield progress(
+        _("engine.analyzing"),
+        _("engine.analyzing_detail", count=len(sheet_names), names=names_str)
+    )
+
+    if large_file:
+        # Read-Only: Statistiken über iter_rows
+        for ws_idx, ws in enumerate(wb.worksheets):
+            yield sub_progress(
+                _("engine.sheet_progress", idx=ws_idx + 1, count=len(sheet_names), title=ws.title),
+                _("engine.sheet_detail")
+            )
+            stats = SheetStats(name=ws.title)
+            max_row = ws.max_row or 0
+            max_col = ws.max_column or 0
+            is_phantom = (max_row >= EXCEL_MAX_ROW or max_col >= EXCEL_MAX_COL
+                          or max_row >= _SUSPICIOUS_ROW_THRESHOLD
+                          or max_col >= _SUSPICIOUS_COL_THRESHOLD)
+
+            if is_phantom:
+                # Phantom-Dimensionen: Vollständiger Scan mit Early-Exit
+                stats.is_phantom = True
+                scan_cols = min(max_col, 500)
+                last_data_row = 0
+                formula_count = 0
+                static_count = 0
+                used_cols = set()
+                for row_idx, row in enumerate(ws.iter_rows(max_col=scan_cols), 1):
+                    row_has_data = False
+                    for cell in row:
+                        if cell.value is not None:
+                            row_has_data = True
+                            used_cols.add(cell.column)
+                            if cell.data_type == 'f':
+                                formula_count += 1
+                            else:
+                                static_count += 1
+                    if row_has_data:
+                        last_data_row = row_idx
+                    elif row_idx > last_data_row + _EMPTY_RUN_EXIT and last_data_row > 0:
+                        break
+                    if last_data_row == 0 and row_idx > 1000:
+                        break  # Sheet scheint leer zu sein
+                stats.row_count = last_data_row
+                stats.col_count = len(used_cols)
+                stats.formula_count = formula_count
+                stats.static_count = static_count
+            else:
+                # Kleines Sheet in Read-Only: vollständig scannen
+                formula_count = 0
+                static_count = 0
+                non_empty_rows = 0
+                used_cols = set()
+                for row in ws.iter_rows(max_row=max_row, max_col=max_col):
+                    row_has_data = False
+                    for cell in row:
+                        if cell.value is None:
+                            continue
+                        row_has_data = True
+                        used_cols.add(cell.column)
+                        if cell.data_type == 'f':
+                            formula_count += 1
+                        else:
+                            static_count += 1
+                    if row_has_data:
+                        non_empty_rows += 1
+
+                stats.row_count = non_empty_rows
+                stats.col_count = len(used_cols)
+                stats.formula_count = formula_count
+                stats.static_count = static_count
+
+            report.sheet_stats.append(stats)
+
+        # Light-Modus: Volumen-basierte Findings generieren
+        from excel_checker.models import Finding, Severity, Category
+        yield progress(_("engine.volume_light"), _("engine.volume_light_detail"))
+
+        total_rows = sum(s.row_count for s in report.sheet_stats)
+        total_formulas = sum(s.formula_count for s in report.sheet_stats)
+
+        if file_size_mb > 50:
+            report.findings.append(Finding(
+                rule_id="VOL-001", rule_name=_("VOL-001.name"),
+                severity=Severity.CRITICAL,
+                category=Category.VOLUME,
+                message=_("engine.vol_extreme_msg", size=file_size_mb),
+                detail=_("engine.vol_extreme_detail"),
+                suggestion=_("engine.vol_extreme_tip"),
+            ))
+        elif file_size_mb > 20:
+            report.findings.append(Finding(
+                rule_id="VOL-001", rule_name=_("VOL-001.name"),
+                severity=Severity.ERROR,
+                category=Category.VOLUME,
+                message=_("engine.vol_large_msg", size=file_size_mb),
+                detail=_("engine.vol_large_detail"),
+                suggestion=_("engine.vol_large_tip"),
+            ))
+
+        if total_rows > 100000:
+            report.findings.append(Finding(
+                rule_id="VOL-001", rule_name=_("VOL-001.name"),
+                severity=Severity.ERROR,
+                category=Category.VOLUME,
+                message=_("engine.vol_rows_abused", rows=f"{total_rows:,}"),
+                suggestion=_("engine.vol_rows_abused_tip"),
+            ))
+        elif total_rows > 10000:
+            report.findings.append(Finding(
+                rule_id="VOL-001", rule_name=_("VOL-001.name"),
+                severity=Severity.WARNING,
+                category=Category.VOLUME,
+                message=_("engine.vol_rows_high", rows=f"{total_rows:,}"),
+                suggestion=_("engine.vol_rows_high_tip"),
+            ))
+
+        if report.sheet_count > 20:
+            report.findings.append(Finding(
+                rule_id="VOL-001", rule_name=_("VOL-001.name"),
+                severity=Severity.WARNING,
+                category=Category.VOLUME,
+                message=_("engine.vol_many_sheets", count=report.sheet_count),
+                suggestion=_("engine.vol_many_sheets_tip"),
+            ))
+
+        report.findings.append(Finding(
+            rule_id="VOL-001", rule_name=_("VOL-001.name"),
+            severity=Severity.INFO,
+            category=Category.VOLUME,
+            message=_("engine.light_msg", size=file_size_mb),
+            detail=_("engine.light_detail"),
+            suggestion=_("engine.light_tip"),
+        ))
+
+    else:
+        # Normaler Modus: pro Sheet analysieren
+        for ws_idx, ws in enumerate(wb.worksheets):
+            max_row = ws.max_row or 0
+            max_col = ws.max_column or 0
+            is_phantom = (max_row >= EXCEL_MAX_ROW or max_col >= EXCEL_MAX_COL
+                          or max_row >= _SUSPICIOUS_ROW_THRESHOLD
+                          or max_col >= _SUSPICIOUS_COL_THRESHOLD)
+
+            stats = SheetStats(name=ws.title)
+            stats.merged_regions = len(list(ws.merged_cells.ranges))
+
+            if is_phantom:
+                # Phantom-Dimensionen: Vollständiger Scan mit Early-Exit
+                stats.is_phantom = True
+                scan_cols = min(max_col, 500)
+                last_data_row = 0
+                formula_count = 0
+                static_count = 0
+                used_cols = set()
+                row_idx = 0
+                while True:
+                    row_idx += 1
+                    row_has_data = False
+                    for col_idx in range(1, scan_cols + 1):
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        if cell.value is not None:
+                            row_has_data = True
+                            used_cols.add(col_idx)
+                            if cell.data_type == 'f':
+                                formula_count += 1
+                            else:
+                                static_count += 1
+                    if row_has_data:
+                        last_data_row = row_idx
+                    elif row_idx > last_data_row + _EMPTY_RUN_EXIT and last_data_row > 0:
+                        break
+                    if last_data_row == 0 and row_idx > 1000:
+                        break  # Sheet scheint leer zu sein
+                stats.row_count = last_data_row
+                stats.col_count = len(used_cols)
+                stats.formula_count = formula_count
+                stats.static_count = static_count
+            else:
+                # Kein Phantom & kein verdächtiger Bereich: Fuzzy-Scan
+                # Erst echte Grenzen finden, dann Zellen zählen
+                real_cols = _find_last_data_col(ws, max_col, sample_rows=50)
+                real_rows = _find_last_data_row(ws, max_row, check_cols=real_cols or max_col)
+
+                if real_rows == 0:
+                    real_rows = max_row
+                if real_cols == 0:
+                    real_cols = max_col
+
+                formula_count, static_count = _count_cells_sampled(
+                    ws, real_rows, real_cols
+                )
+
+                stats.row_count = real_rows
+                stats.col_count = real_cols
+                stats.formula_count = formula_count
+                stats.static_count = static_count
+
+            report.sheet_stats.append(stats)
+
+    # === Schritt 3-N: Regeln ausführen (nur im Normalmodus) ===
+    for rule_idx, rule_cls in enumerate(active_rules):
+        rule = rule_cls()
+        yield progress(
+            _( "engine.rule_checking", name=rule.rule_name),
+            _( "engine.rule_detail", idx=rule_idx + 1, count=len(active_rules), rule_id=rule.rule_id)
+        )
+
+        findings = []
+        error = None
+        def run_rule():
+            nonlocal findings, error
+            try:
+                # Falls Regel Fortschritts-Callback unterstützt, übergeben
+                if hasattr(rule, 'check') and rule.check.__code__.co_argcount >= 3:
+                    findings = rule.check(wb, file_path, lambda evt: (progress_callback(evt) if progress_callback else None))
+                else:
+                    findings = rule.check(wb, file_path)
+            except Exception as e:
+                error = e
+        thread = threading.Thread(target=run_rule)
+        thread.start()
+        thread.join(timeout=rule_timeout_sec)
+        if thread.is_alive():
+            # Timeout: Thread läuft noch
+            yield progress(
+                _( "engine.rule_error", name=rule.rule_name),
+                _( "engine.rule_error_detail", error=f"Timeout nach {rule_timeout_sec}s"),
+                status="error"
+            )
+            # Thread läuft weiter, aber wir machen weiter mit der nächsten Regel
+            continue
+        if error:
+            tb = traceback.format_exc()
+            yield progress(
+                _( "engine.rule_error", name=rule.rule_name),
+                _( "engine.rule_error_detail", error=f"{error}\n{tb}"),
+                status="error"
+            )
+            continue
+        report.findings.extend(findings)
+
+    # === DB-Readiness pro Sheet berechnen ===
+    for stats in report.sheet_stats:
+        stats.db_readiness = _compute_db_readiness(stats, report.findings)
+
+    # === Letzter Schritt: Empfehlungen ===
+    yield progress(_("engine.recs_progress"), "", "running")
+    report.recommendations = generate_recommendations(report)
+
+    # Fertig-Event
+    yield {
+        "step": _("engine.done"),
+        "detail": _("engine.done_detail", score=report.health_score, findings=len(report.findings)),
+        "pct": 100, "status": "done",
+        "current": total_steps, "total": total_steps,
+    }
+
+    wb.close()
+    yield report

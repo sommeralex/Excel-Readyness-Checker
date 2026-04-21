@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+.DS_Store
+*.log
+
+# Generierte Test-Reports
+test_*_report.html
+test_effizienz_report.html
+
+# Temporäre Upload-Dateien
+/tmp_uploads/
