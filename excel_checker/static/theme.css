@@ -1,0 +1,191 @@
+/* ============================================================
+   Excel-Reifecheck — Theme (Track B, Phase 1)
+   ------------------------------------------------------------
+   Zentrale CSS-Variablen + gemeinsame Komponenten-Styles.
+   Diese Datei wird von allen 4 Seiten geladen:
+     - / (Upload)
+     - /pruefregeln
+     - /report/<id>
+     - /learn
+   WICHTIG: Light-Mode pixelgleich zur ursprünglichen Inline-CSS.
+   Dark-Mode: nur dort aktiv, wo das data-theme="dark" Attribut
+   am <html>-Element gesetzt ist.
+   ============================================================ */
+
+/* ── CSS Custom Properties ───────────────────────────────── */
+:root {
+  --bg: #f8fafc;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --muted: #64748b;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --green: #16a34a;
+  --red: #dc2626;
+  --yellow: #ca8a04;
+}
+
+[data-theme="dark"] {
+  --bg: #0f172a;
+  --card: #1e293b;
+  --border: #334155;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #60a5fa;
+  --accent-hover: #93c5fd;
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #fbbf24;
+}
+
+/* ── Reset (in allen 4 Seiten identisch vorhanden) ─────── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── Body Defaults ──
+   Hinweis: padding und display NICHT hier setzen, da die Upload-Seite
+   ein zentriertes Flex-Layout braucht und die anderen ein normales
+   Block-Layout. Body-Layout bleibt seitenspezifisch. */
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* ── Buttons (Primary) ──
+   Vorhanden in Upload, Report, Learn. Pixelgleich zur Upload-Seite. */
+.btn {
+  display: inline-block;
+  margin-top: 1.5rem;
+  padding: 0.75rem 2rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { background: var(--muted); cursor: not-allowed; }
+
+.btn-sm {
+  padding: 0.65rem 1.25rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.btn-sm:hover { background: var(--accent-hover); }
+.btn-sm:disabled { background: var(--muted); cursor: not-allowed; }
+
+/* ── Cards ──
+   Generische Card-Komponente; Pruefregeln/Learn/Report nutzen sie. */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ── Spinner Animation (Upload + Report) ───────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+/* ── Progress-Bar (Upload-Seite) ───────────────────────── */
+.progress-bar {
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+  width: 0%;
+}
+
+/* ── Theme-Toggle (Upload) ──
+   Lang-Toggle Position bleibt seitenspezifisch. */
+.theme-toggle {
+  position: absolute;
+  top: -1.5rem;
+  width: 42px;
+  height: 42px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  font-weight: 600;
+}
+.theme-toggle { right: 0; }
+.theme-toggle:hover { background: var(--border); }
+
+/* Theme-Toggle (Report) — kleinerer, oben-rechts schwebender Button */
+.theme-toggle-report {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  width: 42px;
+  height: 42px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  cursor: pointer;
+  font-size: 1.15rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  font-weight: 600;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.theme-toggle-report:hover { background: var(--border); }
+
+/* ── Report-spezifische SVG-Farb-Targeting ──
+   SVG-Attribute akzeptieren keine CSS-Variablen, daher hier
+   per CSS-Selector überschreiben. Light = Original-Hex.
+   Dark = passender Kontrast. */
+[data-theme="dark"] .report-svg-grid-stroke { stroke: #475569; }
+[data-theme="dark"] .report-svg-axis-stroke { stroke: #475569; }
+[data-theme="dark"] .report-svg-label-fill { fill: #cbd5e1; }
+[data-theme="dark"] .report-svg-bar-label-fill { fill: #94a3b8; }
+[data-theme="dark"] .report-svg-bar-value-fill { fill: #e2e8f0; }
+[data-theme="dark"] .report-svg-ring-bg { stroke: #334155; }
+
+/* ── Mobile Breakpoint (alle Seiten) ──
+   Reduziert Padding, schaltet Multi-Column-Grids zu 1-Column. */
+@media (max-width: 768px) {
+  body { padding-left: 1rem; padding-right: 1rem; }
+  .card { padding: 1rem; }
+}

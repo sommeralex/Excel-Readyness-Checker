@@ -48,6 +48,9 @@ class UndocumentedColorCodesRule(BaseRule):
 
     rule_id = "IMP-001"
     rule_name = _("IMP-001.name")
+    needs_styles = True
+    scales_with_cells = True
+    supports_sampling = True
 
     # Begriffe die auf eine Legende hindeuten
     LEGEND_KEYWORDS = {
@@ -220,6 +223,7 @@ class HiddenRowsColumnsRule(BaseRule):
 
     rule_id = "IMP-003"
     rule_name = _("IMP-003.name")
+    needs_styles = True  # row_dimensions/column_dimensions sind im read_only-Modus leer
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -263,6 +267,7 @@ class ConditionalFormattingRule(BaseRule):
 
     rule_id = "IMP-004"
     rule_name = "Bedingte Formatierungen (Implizite Logik)"
+    needs_styles = True  # ws.conditional_formatting ist im read_only-Modus nicht verfügbar
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -299,6 +304,8 @@ class MagicNumbersRule(BaseRule):
 
     rule_id = "IMP-005"
     rule_name = "Hartcodierte Werte in Formeln"
+    scales_with_cells = True
+    supports_sampling = True
 
     # Harmlose Zahlen (0, 1, 2, 100 usw.)
     HARMLESS = {0, 1, 2, 10, 100, 1000, 12, 24, 365, 360}
@@ -371,6 +378,7 @@ class DataValidationRule(BaseRule):
 
     rule_id = "IMP-006"
     rule_name = "Hardcodierte Validierungslisten"
+    needs_styles = True  # ws.data_validations ist im read_only-Modus nicht verfügbar
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -459,6 +467,8 @@ class CommentsWithLogicRule(BaseRule):
 
     rule_id = "IMP-008"
     rule_name = "Geschäftslogik in Kommentaren"
+    needs_styles = True  # cell.comment ist im read_only-Modus nicht verfügbar
+    scales_with_cells = True
 
     LOGIC_KEYWORDS = {
         "achtung", "wichtig", "nicht ändern", "nicht löschen",
@@ -525,6 +535,9 @@ class CustomNumberFormatsRule(BaseRule):
 
     rule_id = "IMP-009"
     rule_name = "Irreführende Zahlenformate"
+    needs_styles = True  # cell.number_format ist im read_only-Modus nicht verfügbar
+    scales_with_cells = True
+    supports_sampling = True
 
     SUSPICIOUS_FORMATS = [
         (r'0+\.0+.*["\']', "Zahl wird mit Text-Suffix angezeigt"),

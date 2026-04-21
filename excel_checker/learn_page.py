@@ -14,26 +14,11 @@ LEARN_PAGE_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>⚡ Warum eine Datenbank? – Excel-Reifecheck</title>
+<link rel="stylesheet" href="/static/theme.css">
 <style>
-  :root {
-    --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
-    --text: #1e293b; --muted: #64748b; --accent: #3b82f6;
-    --accent-hover: #2563eb; --green: #16a34a; --red: #dc2626;
-    --yellow: #ca8a04;
-  }
-  [data-theme="dark"] {
-    --bg: #0f172a; --card: #1e293b; --border: #334155;
-    --text: #e2e8f0; --muted: #94a3b8; --accent: #60a5fa;
-    --accent-hover: #93c5fd; --green: #4ade80; --red: #f87171;
-    --yellow: #fbbf24;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: var(--bg); color: var(--text);
-    line-height: 1.7;
-    transition: background 0.3s, color 0.3s;
-  }
+  /* Vars + Reset jetzt in theme.css.
+     Body bekommt hier nur die seitenspezifische Zeilenhöhe. */
+  body { line-height: 1.7; }
 
   /* Hero */
   .hero {
@@ -236,6 +221,15 @@ LEARN_PAGE_HTML = r"""<!DOCTYPE html>
     .hero h1 { font-size: 1.6rem; }
     .growth-bars { gap: 0.5rem; }
     .growth-bar { width: 40px; }
+  }
+  /* Zusätzlicher Mobile-Breakpoint (Track B) — reduziert Padding und
+     bricht 2-Column-Sub-Grids zu 1-Column. Bewusst >700px gewählt,
+     damit der bestehende Breakpoint nicht überschrieben wird. */
+  @media (max-width: 768px) {
+    .container { padding: 1rem 1rem; }
+    .section { padding: 1.25rem; }
+    .hero { padding: 2.5rem 1rem 2rem; }
+    .cta { padding: 1.25rem; }
   }
 </style>
 </head>

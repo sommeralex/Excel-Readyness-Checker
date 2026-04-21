@@ -13,6 +13,7 @@ class FormulaErrorValuesRule(BaseRule):
     """Prüft auf Fehlerwerte in Formeln (z.B. #DIV/0!, #WERT!, #BEZUG!, #NAME?)."""
     rule_id = "FRM-006"
     rule_name = _("FRM-006.name")
+    scales_with_cells = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str) -> List[Finding]:
         findings = []

@@ -4,29 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Excel-Reifecheck</title>
+<link rel="stylesheet" href="/static/theme.css">
 <style>
-  :root {
-    --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
-    --text: #1e293b; --muted: #64748b; --accent: #3b82f6;
-    --accent-hover: #2563eb; --green: #16a34a;
-  }
-  [data-theme="dark"] {
-    --bg: #0f172a; --card: #1e293b; --border: #334155;
-    --text: #e2e8f0; --muted: #94a3b8; --accent: #60a5fa;
-    --accent-hover: #93c5fd; --green: #4ade80;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* Seiten-spezifisch: Body wird hier zentriert (Upload-Layout). */
   body {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    background: var(--bg); color: var(--text);
     min-height: 100vh; display: flex; align-items: center;
     justify-content: center; padding: 2rem;
-    transition: background 0.3s, color 0.3s;
   }
   .container { max-width: 640px; width: 100%; position: relative; }
-  .theme-toggle, .lang-toggle {
+  /* lang-toggle teilt Großteil seiner Styles mit .theme-toggle, ist aber
+     versetzt positioniert und nur hier gebraucht. */
+  .lang-toggle {
     position: absolute;
     top: -1.5rem;
+    right: 3rem;
     width: 42px;
     height: 42px;
     background: var(--card);
@@ -42,9 +33,7 @@
     transition: background 0.2s;
     font-weight: 600;
   }
-  .theme-toggle { right: 0; }
-  .lang-toggle { right: 3rem; }
-  .theme-toggle:hover, .lang-toggle:hover { background: var(--border); }
+  .lang-toggle:hover { background: var(--border); }
   .logo {
     text-align: center; margin-bottom: 2rem;
   }
@@ -69,15 +58,7 @@
   .drop-zone .icon { font-size: 3rem; margin-bottom: 1rem; }
   .drop-zone h2 { font-size: 1.15rem; margin-bottom: 0.5rem; }
   .drop-zone p { color: var(--muted); font-size: 0.9rem; }
-  .btn {
-    display: inline-block; margin-top: 1.5rem;
-    padding: 0.75rem 2rem; background: var(--accent);
-    color: white; border: none; border-radius: 8px;
-    font-size: 1rem; font-weight: 600; cursor: pointer;
-    transition: background 0.2s;
-  }
-  .btn:hover { background: var(--accent-hover); }
-  .btn:disabled { background: var(--muted); cursor: not-allowed; }
+  /* .btn / .btn-sm jetzt in theme.css */
   .file-name {
     margin-top: 1rem; padding: 0.5rem 1rem;
     background: #f0fdf4; border: 1px solid #bbf7d0;
@@ -89,15 +70,7 @@
     margin-top: 1rem; display: none;
   }
   .progress.visible { display: block; }
-  .progress-bar {
-    height: 8px; background: var(--border); border-radius: 4px;
-    overflow: hidden; margin-bottom: 1rem;
-  }
-  .progress-bar-fill {
-    height: 100%; background: var(--accent); border-radius: 4px;
-    transition: width 0.3s ease;
-    width: 0%;
-  }
+  /* .progress-bar / .progress-bar-fill jetzt in theme.css */
   .progress-text {
     text-align: center; margin-top: 0.5rem;
     color: var(--muted); font-size: 0.85rem;
@@ -128,14 +101,7 @@
     text-align: center; font-size: 1.5rem; font-weight: 700;
     color: var(--accent); margin-bottom: 0.5rem;
   }
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-  .spinner {
-    display: inline-block; width: 14px; height: 14px;
-    border: 2px solid var(--border); border-top-color: var(--accent);
-    border-radius: 50%; animation: spin 0.6s linear infinite;
-  }
+  /* @keyframes spin / .spinner jetzt in theme.css */
   .info {
     margin-top: 2rem; padding: 1rem 1.25rem;
     background: var(--card); border: 1px solid var(--border);
@@ -214,14 +180,7 @@
   }
   .url-input:focus { border-color: var(--accent); }
   .url-input::placeholder { color: #94a3b8; }
-  .btn-sm {
-    padding: 0.65rem 1.25rem; background: var(--accent);
-    color: white; border: none; border-radius: 8px;
-    font-size: 0.9rem; font-weight: 600; cursor: pointer;
-    transition: background 0.2s; white-space: nowrap;
-  }
-  .btn-sm:hover { background: var(--accent-hover); }
-  .btn-sm:disabled { background: var(--muted); cursor: not-allowed; }
+  /* .btn-sm jetzt in theme.css */
   .url-hint {
     margin-top: 0.5rem; font-size: 0.8rem; color: var(--muted);
   }
@@ -238,6 +197,18 @@
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-content { display: none; padding-top: 1.5rem; }
   .tab-content.active { display: block; }
+
+  /* ── Mobile ── */
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    .feature-cards { grid-template-columns: 1fr; }
+    .drop-zone { padding: 2rem 1rem; }
+    .url-section { padding: 1rem 1.25rem; }
+    .url-input-group { flex-direction: column; }
+    .url-input-group .btn-sm { width: 100%; }
+    .tab { padding: 0.5rem 0.8rem; font-size: 0.85rem; }
+    .logo h1 { font-size: 1.4rem; }
+  }
 </style>
 </head>
 <body>
@@ -841,6 +812,11 @@ form.addEventListener('submit', async (e) => {
   submitBtn.textContent = '⏳ Wird hochgeladen...';
   dropZone.style.display = 'none';
 
+  const prevShowBtn = document.getElementById('showReportBtn');
+  const prevDownloadBtn = document.getElementById('downloadReportBtn');
+  if (prevShowBtn) prevShowBtn.style.display = 'none';
+  if (prevDownloadBtn) prevDownloadBtn.style.display = 'none';
+
   const els = startProgress('');
 
   // 1. Upload per AJAX
@@ -895,21 +871,14 @@ form.addEventListener('submit', async (e) => {
         window.open('/download-report/' + reportId, '_blank');
       };
     }
-    // Erfolgsmeldung anzeigen
+    // Erfolgsmeldung anzeigen – Report-Buttons bleiben sichtbar,
+    // bis der User einen neuen Upload startet (dort werden sie ausgeblendet).
     els.text.textContent = '✅ Regelprüfung abgeschlossen. Sie können jetzt den Report anzeigen oder herunterladen.';
+    submitBtn.disabled = false;
     submitBtn.textContent = '🔍 Health Check starten';
-    // UI zurücksetzen für neuen Upload
-    setTimeout(() => {
-      submitBtn.disabled = false;
-      submitBtn.textContent = '🔍 Health Check starten';
-      dropZone.style.display = '';
-      fileName.classList.remove('visible');
-      errorMsg.classList.remove('visible');
-      document.getElementById('progress').classList.remove('visible');
-      fileInput.value = '';
-      if (showBtn) showBtn.style.display = 'none';
-      if (downloadBtn) downloadBtn.style.display = 'none';
-    }, 3000);
+    dropZone.style.display = '';
+    fileName.classList.remove('visible');
+    fileInput.value = '';
   } catch (err) {
     errorMsg.textContent = err.message;
     errorMsg.classList.add('visible');

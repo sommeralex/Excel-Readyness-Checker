@@ -78,6 +78,7 @@ class Finding:
     detail: Optional[str] = None
     suggestion: Optional[str] = None  # Konkreter Verbesserungsvorschlag
     score_penalty: int = 0  # Abzug vom Health-Score (0-100)
+    sample_note: Optional[str] = None  # Gesetzt, wenn Finding auf Stichprobe basiert
 
 
 @dataclass

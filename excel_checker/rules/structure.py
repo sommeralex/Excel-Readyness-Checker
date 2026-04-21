@@ -46,18 +46,35 @@ class DataTypeHomogeneityRule(BaseRule):
 
     rule_id = "STR-002"
     rule_name = _("STR-002.name")
+    scales_with_cells = True
+    supports_sampling = True
 
-    def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
+    def check(
+        self,
+        workbook: openpyxl.Workbook,
+        file_path: str,
+        progress_callback=None,
+        sample_mode=None,
+    ) -> List[Finding]:
         findings = []
+        # Bei aktiver Stichprobe: engere Schranken, sonst die bisherigen Limits.
+        if sample_mode is not None:
+            row_cap = min(sample_mode.max_rows_per_sheet, 3000)
+            col_cap = min(sample_mode.max_cols_per_sheet, 100)
+            sample_note = sample_mode.disclosure_de()
+        else:
+            row_cap = 3000
+            col_cap = 100
+            sample_note = None
+
         for ws in workbook.worksheets:
             if ws.max_row is None or ws.max_row < 3:
                 continue
-            max_row = min(ws.max_row, 3000)  # Performance-Limit
-            max_col = min(ws.max_column or 1, 100)
+            max_row = min(ws.max_row, row_cap)
+            max_col = min(ws.max_column or 1, col_cap)
             for col_idx in range(1, max_col + 1):
                 type_counts: Counter = Counter()
                 non_empty = 0
-                mixed_examples = []
                 for row_idx in range(2, max_row + 1):  # Skip header
                     cell = ws.cell(row=row_idx, column=col_idx)
                     if cell.value is None:
@@ -96,6 +113,7 @@ class DataTypeHomogeneityRule(BaseRule):
                             sheet=ws.title,
                             suggestion=_("STR-002.tip", col=col_letter),
                             score_penalty=3,
+                            sample_note=sample_note,
                         ))
         return findings
 
@@ -175,6 +193,7 @@ class EmptyRowColSeparatorRule(BaseRule):
 
     rule_id = "STR-004"
     rule_name = _("STR-004.name")
+    scales_with_cells = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -222,6 +241,8 @@ class IdentifierConsistencyRule(BaseRule):
 
     rule_id = "STR-005"
     rule_name = _( "STR-005.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     # Pattern das typische IDs erkennt: PREFIX-NNN, PREFIX_NNN, PREFIX.NNN
     ID_PATTERN = re.compile(r'^([A-Za-zÄÖÜäöü]+)([-_./])(\d+)(.*)$')
@@ -379,6 +400,7 @@ class MissingUniqueKeyRule(BaseRule):
 
     rule_id = "STR-006"
     rule_name = _("STR-006.name")
+    scales_with_cells = True
 
     # Header-Begriffe die NICHT als ID-Spalten zählen
     NON_ID_HEADERS = {
@@ -438,6 +460,8 @@ class TextBasedIdRule(BaseRule):
 
     rule_id = "STR-007"
     rule_name = _("STR-007.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     # Header-Begriffe die auf ID-Spalten hindeuten
     ID_HEADER_HINTS = {

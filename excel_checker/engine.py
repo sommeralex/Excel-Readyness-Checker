@@ -211,6 +211,73 @@ def analyze(
 import threading
 import traceback
 
+from excel_checker.rules._sampling import SampleMode
+
+# Tier-Schwellen (MB). Tier 1 = voller Scan, Tier 2 = read-only + Sampling
+# für style-lose Regeln, Tier 3 = nur skalierbare Regeln mit aggressiverem
+# Sampling. Die Schwellen sind bewusst konservativ gewählt — sie lassen sich
+# später experimentell verschieben.
+_TIER1_MAX_MB = 15
+_TIER2_MAX_MB = 50
+
+
+def _select_tier(file_size_mb: float) -> tuple[int, Optional[SampleMode], dict]:
+    """Wählt Scan-Tier, Sampling-Strategie und openpyxl-Load-Kwargs.
+
+    Rückgabe:
+        (tier_nr, sample_mode_or_None, load_kwargs)
+
+    tier 1: alle Regeln, vollständiger Scan, keine Sampling-Einschränkung.
+    tier 2: Regeln ohne ``needs_styles`` laufen, sampling-fähige Regeln
+            bekommen ``SampleMode`` übergeben. Workbook wird NICHT im
+            read-only-Modus geladen, da bestehende Regeln ``ws.cell(r,c)``
+            nutzen – das ist in openpyxl read-only ineffizient.
+    tier 3: wie Tier 2, aber Regeln die weder sampling-fähig noch
+            zellen-unabhängig sind, werden übersprungen. Aggressiveres
+            Sampling (kleinere Stichprobe pro Blatt).
+
+    Der read-only-Modus bleibt eine spätere Optimierung (würde erfordern,
+    dass Regeln ``iter_rows`` statt ``ws.cell`` nutzen).
+    """
+    base_load = {"read_only": False, "data_only": False}
+    if file_size_mb <= _TIER1_MAX_MB:
+        return 1, None, base_load
+    if file_size_mb <= _TIER2_MAX_MB:
+        return (
+            2,
+            SampleMode(max_cells_per_sheet=10_000, max_rows_per_sheet=20_000),
+            base_load,
+        )
+    return (
+        3,
+        SampleMode(max_cells_per_sheet=3_000, max_rows_per_sheet=8_000),
+        base_load,
+    )
+
+
+def _filter_rules_for_tier(
+    rules: List[type[BaseRule]], tier: int
+) -> List[type[BaseRule]]:
+    """Filtert Regeln passend zum Tier.
+
+    Tier 1: alle Regeln
+    Tier 2: alle Regeln ohne ``needs_styles``
+    Tier 3: alle Regeln ohne ``needs_styles`` und, wenn ``scales_with_cells``,
+            nur mit ``supports_sampling``
+    """
+    if tier == 1:
+        return list(rules)
+    if tier == 2:
+        return [r for r in rules if not r.needs_styles]
+    # tier 3
+    return [
+        r
+        for r in rules
+        if not r.needs_styles
+        and (not r.scales_with_cells or r.supports_sampling)
+    ]
+
+
 def analyze_with_progress(
     file_path: str,
     rules: Optional[List[type[BaseRule]]] = None,
@@ -253,9 +320,13 @@ def analyze_with_progress(
     file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
     size_str = f"{file_size_mb:.1f} MB" if file_size_mb >= 0.1 else f"{file_size_mb * 1024:.0f} KB"
 
-    # Bei großen Dateien (>15 MB): Light-Modus ohne zellenbasierte Regeln
-    large_file = file_size_mb > 15
-    active_rules = [] if large_file else rules
+    # Gestuftes Scan-Modell: siehe _select_tier für die Entscheidungslogik.
+    tier, sample_mode, load_kwargs = _select_tier(file_size_mb)
+    active_rules = _filter_rules_for_tier(rules, tier)
+    # Das alte Verhalten ("keine Regeln bei >15 MB") bleibt als Notanker in
+    # tier 2/3 erhalten, falls alle Regeln rausgefiltert werden — die reinen
+    # Volumen-Findings werden unten im ``tier >= 2``-Branch generiert.
+    large_file = tier >= 2
 
     total_steps = len(active_rules) + 3  # Laden, Stats, Empfehlungen
 
@@ -285,10 +356,8 @@ def analyze_with_progress(
     }
 
     # === Schritt 1: Datei laden ===
-    if large_file:
-        wb = openpyxl.load_workbook(file_path, data_only=False, read_only=True)
-    else:
-        wb = openpyxl.load_workbook(file_path, data_only=False, read_only=False)
+    # load_kwargs ist vom Tier bestimmt (read_only=True ab Tier 2).
+    wb = openpyxl.load_workbook(file_path, **load_kwargs)
     current_step = 1
 
     report = WorkbookReport(
@@ -510,12 +579,22 @@ def analyze_with_progress(
 
         findings = []
         error = None
+        # Sample-Mode nur an sampling-fähige Regeln übergeben. Andere Regeln
+        # ignorieren die Stichproben-Schwelle und scannen ihre üblichen
+        # Teil-Bereiche (z. B. erste 5000 Zeilen).
+        effective_sample = sample_mode if rule_cls.supports_sampling else None
+
         def run_rule():
             nonlocal findings, error
             try:
-                # Falls Regel Fortschritts-Callback unterstützt, übergeben
-                if hasattr(rule, 'check') and rule.check.__code__.co_argcount >= 3:
-                    findings = rule.check(wb, file_path, lambda evt: (progress_callback(evt) if progress_callback else None))
+                # argcount enthält self → 4 bedeutet: check(self, wb, file_path, progress_callback)
+                # 5 bedeutet: check(self, wb, file_path, progress_callback, sample_mode)
+                argcount = rule.check.__code__.co_argcount
+                progress_cb = lambda evt: (progress_callback(evt) if progress_callback else None)
+                if argcount >= 5:
+                    findings = rule.check(wb, file_path, progress_cb, effective_sample)
+                elif argcount >= 4:
+                    findings = rule.check(wb, file_path, progress_cb)
                 else:
                     findings = rule.check(wb, file_path)
             except Exception as e:

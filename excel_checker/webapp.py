@@ -67,15 +67,23 @@ UPLOAD_PAGE, _start_analysis = _recover_from_backup()
 ERROR_PAGE = """<!DOCTYPE html>
 <html lang="de"><head><meta charset="UTF-8">
 <title>Fehler</title>
+<link rel="stylesheet" href="/static/theme.css">
 <style>
-  body { font-family: 'Segoe UI', sans-serif; display: flex;
-         align-items: center; justify-content: center; min-height: 100vh;
-         background: #f8fafc; }
-  .box { background: white; border: 1px solid #fecaca; border-radius: 12px;
+  body { display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; }
+  .box { background: var(--card); border: 1px solid #fecaca; border-radius: 12px;
          padding: 2rem; max-width: 500px; text-align: center; }
-  .box h1 { color: #dc2626; }
-  a { color: #3b82f6; text-decoration: none; }
-</style></head>
+  .box h1 { color: var(--red); }
+  a { color: var(--accent); text-decoration: none; }
+</style>
+<script>
+  (function() {
+    if (localStorage.getItem('theme') === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
+</head>
 <body><div class="box">
   <h1>⚠️ {{ title }}</h1>
   <p style="margin:1rem 0;">{{ message }}</p>
@@ -89,17 +97,11 @@ PRUEFREGELN_PAGE = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prüfregeln – Excel-Reifecheck</title>
+<link rel="stylesheet" href="/static/theme.css">
 <style>
-  :root {
-    --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
-    --text: #1e293b; --muted: #64748b; --accent: #3b82f6;
-  }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    background: var(--bg); color: var(--text);
-    padding: 2rem; line-height: 1.6;
-  }
+  /* Vars + Reset + body-Defaults jetzt in theme.css.
+     Hier nur seitenspezifisches Padding (Original-Wert). */
+  body { padding: 2rem; }
   .container { max-width: 960px; margin: 0 auto; }
   h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
   .subtitle { color: var(--muted); margin-bottom: 2rem; font-size: 1rem; }
@@ -151,7 +153,19 @@ PRUEFREGELN_PAGE = """<!DOCTYPE html>
   .why-col ul { padding-left: 1.2rem; }
   .why-col li { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.35rem; }
   @media (max-width: 640px) { .why-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    .rule-grid { grid-template-columns: 1fr; }
+  }
 </style>
+<script>
+  // Dark-Mode Init (synchron, vor Body-Render, um FOUC zu vermeiden).
+  (function() {
+    if (localStorage.getItem('theme') === 'dark') {
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  })();
+</script>
 </head>
 <body>
 <div class="container">

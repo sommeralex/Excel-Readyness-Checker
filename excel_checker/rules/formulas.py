@@ -60,6 +60,8 @@ class AbsoluteVsRelativeRule(BaseRule):
 
     rule_id = "FRM-001"
     rule_name = _("FRM-001.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -120,6 +122,8 @@ class VolatileFunctionsRule(BaseRule):
 
     rule_id = "FRM-002"
     rule_name = _("FRM-002.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -166,6 +170,8 @@ class VlookupChainsRule(BaseRule):
 
     rule_id = "FRM-003"
     rule_name = _("FRM-003.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -214,6 +220,7 @@ class CircularReferenceHintRule(BaseRule):
 
     rule_id = "FRM-004"
     rule_name = _("FRM-004.name")
+    scales_with_cells = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -256,6 +263,8 @@ class CrossSheetReferenceRule(BaseRule):
 
     rule_id = "FRM-005"
     rule_name = _("FRM-005.name")
+    scales_with_cells = True
+    supports_sampling = True
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []

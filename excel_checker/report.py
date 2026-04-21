@@ -267,9 +267,10 @@ def _radar_chart_svg(dimensions: dict[str, float], size: int = 400) -> str:
         a = -math.pi / 2 + i * angle_step
         x2 = cx + radius * math.cos(a)
         y2 = cy + radius * math.sin(a)
+        # class für Dark-Mode-Override (siehe theme.css .report-svg-axis-stroke)
         axis_lines.append(
             f'<line x1="{cx}" y1="{cy}" x2="{x2:.1f}" y2="{y2:.1f}" '
-            f'stroke="#cbd5e1" stroke-width="1"/>'
+            f'stroke="#cbd5e1" stroke-width="1" class="report-svg-axis-stroke"/>'
         )
 
     # Datenfläche
@@ -313,14 +314,14 @@ def _radar_chart_svg(dimensions: dict[str, float], size: int = 400) -> str:
             label_elems.append(
                 f'<text x="{lx:.1f}" y="{ly - 8:.1f}" text-anchor="{anchor}" '
                 f'dominant-baseline="central" font-size="12" fill="#475569" '
-                f'font-weight="500">'
+                f'font-weight="500" class="report-svg-label-fill">'
                 f'{tspans}</text>'
             )
         else:
             label_elems.append(
                 f'<text x="{lx:.1f}" y="{ly:.1f}" text-anchor="{anchor}" '
                 f'dominant-baseline="central" font-size="12" fill="#475569" '
-                f'font-weight="500">'
+                f'font-weight="500" class="report-svg-label-fill">'
                 f'{html.escape(labels[i])}</text>'
             )
 
@@ -356,7 +357,8 @@ def _bar_chart_svg(data: dict[str, float], label: str, max_val: float | None = N
         bw = max(2, bar_area * (val / max_val)) if max_val > 0 else 2
         parts.append(
             f'<text x="130" y="{y + bar_height // 2 + 4}" text-anchor="end" '
-            f'font-size="12" fill="#64748b">{html.escape(str(name))}</text>'
+            f'font-size="12" fill="#64748b" class="report-svg-bar-label-fill">'
+            f'{html.escape(str(name))}</text>'
         )
         parts.append(
             f'<rect x="140" y="{y}" width="{bw:.0f}" height="{bar_height}" '
@@ -364,7 +366,8 @@ def _bar_chart_svg(data: dict[str, float], label: str, max_val: float | None = N
         )
         parts.append(
             f'<text x="{140 + bw + 6:.0f}" y="{y + bar_height // 2 + 4}" '
-            f'font-size="11" fill="#334155">{val:,.0f}</text>'
+            f'font-size="11" fill="#334155" class="report-svg-bar-value-fill">'
+            f'{val:,.0f}</text>'
         )
         y += bar_height + 8
     parts.append("</svg>")
@@ -460,10 +463,20 @@ def _html_head(filename: str, now: str) -> str:
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1.0'>
 <title>Excel-Reifecheck – {_esc(filename)}</title>
+<link rel='stylesheet' href='/static/theme.css'>
+<script>
+  // Dark-Mode Init synchron (FOUC vermeiden). Nutzt das gemeinsame
+  // 'theme'-Schlüssel-Pattern wie Upload- und Learn-Seite.
+  (function() {{
+    if (localStorage.getItem('theme') === 'dark') {{
+      document.documentElement.setAttribute('data-theme', 'dark');
+    }}
+  }})();
+</script>
 <style>
-:root {{ --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0; --text: #1e293b; --muted: #64748b; --accent: #3b82f6; }}
-* {{ margin: 0; padding: 0; box-sizing: border-box; }}
-body {{ font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 1rem; }}
+/* Vars + Reset + body-Defaults stammen aus theme.css.
+   Hier nur seitenspezifisches Padding (Original-Wert). */
+body {{ padding: 1rem; }}
 .container {{ max-width: 1200px; margin: 0 auto; }}
 .header {{ text-align: center; margin-bottom: 1.5rem; padding: 1.5rem; background: var(--card); border-radius: 12px; border: 1px solid var(--border); }}
 .header h1 {{ font-size: 1.5rem; margin-bottom: 0.25rem; }}
@@ -761,6 +774,7 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
 </style>
 </head>
 <body>
+<button class="theme-toggle-report" onclick="toggleTheme()" title="Dark/Light Mode" id="themeToggleBtn">🌙</button>
 <div class="container">
 <div class="header">
   <h1>⚡ Excel-Reifecheck</h1>
@@ -787,7 +801,7 @@ def _html_hero(score: int, color: str, label: str,
     <div style="text-align:center;">
       <div class="score-ring">
         <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8"/>
+          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
           <circle cx="55" cy="55" r="40" fill="none" stroke="{color}" stroke-width="8"
                   stroke-dasharray="{score / 100 * 251:.0f} 251" stroke-linecap="round"/>
         </svg>
@@ -804,7 +818,7 @@ def _html_hero(score: int, color: str, label: str,
     <div style="text-align:center;">
       <div class="score-ring">
         <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8"/>
+          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
           <circle cx="55" cy="55" r="40" fill="none" stroke="{ai_ready_color}" stroke-width="8"
                   stroke-dasharray="{ai_ready / 100 * 251:.0f} 251" stroke-linecap="round"/>
         </svg>
@@ -821,7 +835,7 @@ def _html_hero(score: int, color: str, label: str,
     <div style="text-align:center;">
       <div class="score-ring">
         <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8"/>
+          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
           <circle cx="55" cy="55" r="40" fill="none" stroke="{avg_db_color}" stroke-width="8"
                   stroke-dasharray="{avg_db / 100 * 251:.0f} 251" stroke-linecap="round"/>
         </svg>
@@ -1723,6 +1737,28 @@ def _html_footer() -> str:
 </div>
 
 <script>
+// ── Dark/Light Mode (Track B Phase 1) ──
+// Initiale Synchronisierung (Inhalt im Head-Skript, hier nur Button-Icon).
+(function() {
+  var btn = document.getElementById('themeToggleBtn');
+  if (btn && document.documentElement.getAttribute('data-theme') === 'dark') {
+    btn.textContent = '☀️';
+  }
+})();
+function toggleTheme() {
+  var html = document.documentElement;
+  var btn = document.getElementById('themeToggleBtn');
+  if (html.getAttribute('data-theme') === 'dark') {
+    html.removeAttribute('data-theme');
+    if (btn) btn.textContent = '🌙';
+    localStorage.setItem('theme', 'light');
+  } else {
+    html.setAttribute('data-theme', 'dark');
+    if (btn) btn.textContent = '☀️';
+    localStorage.setItem('theme', 'dark');
+  }
+}
+
 function downloadReport() {
   const html = document.documentElement.outerHTML;
   const blob = new Blob(['<!DOCTYPE html>' + html], {type: 'text/html;charset=utf-8'});
