@@ -196,9 +196,10 @@ def _score_label(score: int) -> str:
 def _compute_compliance_score(report: 'WorkbookReport') -> tuple[int, str, list[tuple[str, str, str]]]:
     """Berechnet Compliance-Score (0-100, höher = weniger Risiko).
 
-    Returns: (score, color, risks) mit risks = [(icon, title, desc), ...].
-    Solange PII-Regeln noch nicht existieren (Phase A), gehen Critical-Findings
-    und implizites Wissen als Proxy in die Berechnung ein.
+    Gewichtung: ein einziger PII-Treffer bedeutet "Risiko vorhanden" und
+    zieht 25 Basis-Punkte ab; jeder weitere Treffer zählt nur noch
+    degressiv (max. 30 Punkte pro Kategorie). So signalisiert ein Score
+    von 50 eine relevante Risiko-Lage, nicht "maximal kaputt".
     """
     pii_count = sum(1 for f in report.findings if f.rule_id.startswith("PII-"))
     critical_count = report.critical_count
@@ -215,7 +216,16 @@ def _compute_compliance_score(report: 'WorkbookReport') -> tuple[int, str, list[
         risks.append(("🧠", f"{imp_count}× implizites Wissen",
                       "Farbcodes, versteckte Blätter, undokumentierte Logik"))
 
-    penalty = pii_count * 15 + critical_count * 20 + imp_count * 5
+    def _tier_penalty(count: int, base: int, per_extra: int, cap: int) -> int:
+        if count <= 0:
+            return 0
+        return min(cap, base + per_extra * (count - 1))
+
+    penalty = (
+        _tier_penalty(pii_count, base=20, per_extra=2, cap=35)
+        + _tier_penalty(critical_count, base=15, per_extra=5, cap=30)
+        + _tier_penalty(imp_count, base=5, per_extra=1, cap=15)
+    )
     score = max(0, 100 - penalty)
     color = "#16a34a" if score >= 70 else "#ca8a04" if score >= 40 else "#dc2626"
     return score, color, risks
