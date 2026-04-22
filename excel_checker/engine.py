@@ -626,6 +626,10 @@ def analyze_with_progress(
             yield error_evt
             continue
         report.findings.extend(findings)
+        # Phase 2 A.3: Regeln können zusätzlich Column-Profiles liefern.
+        extra_profiles = getattr(rule, "column_profiles", None)
+        if extra_profiles:
+            report.column_profiles.extend(extra_profiles)
 
     # === DB-Readiness pro Sheet berechnen ===
     for stats in report.sheet_stats:

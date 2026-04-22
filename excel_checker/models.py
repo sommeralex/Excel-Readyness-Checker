@@ -98,6 +98,24 @@ class SheetStats:
 
 
 @dataclass
+class ColumnProfile:
+    """Profil einer Daten-Spalte für Migration/AI-Readiness-Bewertung."""
+
+    sheet: str
+    column_letter: str  # z. B. "A", "B", …
+    header: Optional[str] = None
+    total: int = 0           # Anzahl nicht-leerer + leerer Zellen unter Header
+    nulls: int = 0           # Leere Zellen
+    unique_count: int = 0
+    dominant_type: Optional[str] = None  # "int" | "float" | "str" | "date" | "bool" | "mixed"
+    type_mix: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def null_ratio(self) -> float:
+        return (self.nulls / self.total) if self.total > 0 else 0.0
+
+
+@dataclass
 class WorkbookReport:
     """Gesamtbericht über eine Excel-Datei."""
 
@@ -107,6 +125,7 @@ class WorkbookReport:
     findings: List[Finding] = field(default_factory=list)
     sheet_stats: List[SheetStats] = field(default_factory=list)
     recommendations: List[Recommendation] = field(default_factory=list)
+    column_profiles: List[ColumnProfile] = field(default_factory=list)
 
     @property
     def health_score(self) -> int:
