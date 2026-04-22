@@ -12,6 +12,12 @@
    am <html>-Element gesetzt ist.
    ============================================================ */
 
+/* ── Font-Imports (Phase 2 C.1) ────────────────────────────
+   Inter für Body-Copy, Geist Mono für Cell-Refs & Code.
+   Externe CDN — Selfhost ist Parkplatz. */
+@import url('https://rsms.me/inter/inter.css');
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.0/dist/fonts/geist-mono/style.css');
+
 /* ── CSS Custom Properties ───────────────────────────────── */
 :root {
   --bg: #f8fafc;
@@ -24,6 +30,41 @@
   --green: #16a34a;
   --red: #dc2626;
   --yellow: #ca8a04;
+
+  /* Severity-Soft-Backgrounds (Phase 2 C.1) —
+     themable Gradienten-Basis, ersetzt hardcoded Farben in report.py. */
+  --bg-error-soft: #fee2e2;
+  --bg-warn-soft: #fef3c7;
+  --bg-ok-soft: #dcfce7;
+  --bg-info-soft: #dbeafe;
+  --bg-warning-soft: #fef9c3;
+  --bg-success-soft: #f0fdf4;
+
+  /* Typografie-Tokens (Phase 2 C.1) */
+  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, 'SFMono-Regular',
+               Menlo, Consolas, monospace;
+  --fw-light: 300;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-bold: 700;
+
+  /* Animation-Tokens (Phase 2 C.1) */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 360ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Shadow-Tokens (Phase 2 C.1, Vercel-Style) */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+  --shadow-lg: 0 12px 28px rgba(0,0,0,0.12);
+
+  /* Z-Layer-Tokens (Phase 2 C.1) */
+  --z-toggle: 100;
+  --z-toast: 1000;
+  --z-modal: 2000;
 }
 
 [data-theme="dark"] {
@@ -37,6 +78,20 @@
   --green: #4ade80;
   --red: #f87171;
   --yellow: #fbbf24;
+
+  /* Severity-Soft-Backgrounds — Dark-Mode-Varianten.
+     Gedämpfte, tiefgesättigte Farbwelt statt bloßer Inversion. */
+  --bg-error-soft: #450a0a;
+  --bg-warn-soft: #451a03;
+  --bg-ok-soft: #052e16;
+  --bg-info-soft: #0c1e3a;
+  --bg-warning-soft: #422006;
+  --bg-success-soft: #022c22;
+
+  /* Shadow-Tokens — dunkler & ausgeprägter für Tiefe auf dunklem Grund */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.45);
+  --shadow-lg: 0 12px 28px rgba(0,0,0,0.55);
 }
 
 /* ── Reset (in allen 4 Seiten identisch vorhanden) ─────── */
@@ -47,11 +102,12 @@
    ein zentriertes Flex-Layout braucht und die anderen ein normales
    Block-Layout. Body-Layout bleibt seitenspezifisch. */
 body {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
-  transition: background 0.3s, color 0.3s;
+  transition: background var(--duration-slow) var(--ease-out),
+              color var(--duration-slow) var(--ease-out);
 }
 
 /* ── Buttons (Primary) ──
@@ -188,4 +244,362 @@ body {
 @media (max-width: 768px) {
   body { padding-left: 1rem; padding-right: 1rem; }
   .card { padding: 1rem; }
+}
+
+/* ============================================================
+   Phase 2 C — Report-Overhaul-Komponenten
+   ============================================================ */
+
+/* ── Animated Score-Gauge (C.3) ───────────────────────────
+   SVG-Circle, dessen stroke-dashoffset beim Load von
+   "volle Lücke" auf den Soll-Wert animiert. */
+@property --gauge-value {
+  syntax: '<number>';
+  initial-value: 0;
+  inherits: false;
+}
+.score-gauge {
+  --gauge-value: 0;
+  --gauge-circumference: 251.2; /* 2π·40 */
+}
+.score-gauge .gauge-ring-fg {
+  stroke-dasharray: var(--gauge-circumference);
+  stroke-dashoffset: calc(var(--gauge-circumference) * (1 - var(--gauge-value) / 100));
+  transition: stroke-dashoffset var(--duration-slow) var(--ease-out);
+}
+.score-gauge-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1.25rem;
+  margin: 1.5rem 0 2rem;
+}
+.score-gauge-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.25rem 1rem;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+}
+.score-gauge-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.score-gauge-label {
+  font-size: 0.85rem;
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 0.5rem;
+}
+.score-gauge-value {
+  font-size: 2rem;
+  font-weight: var(--fw-bold);
+  color: var(--text);
+  line-height: 1;
+  margin-top: 0.25rem;
+}
+
+/* ── Audience-Tabs (C.4) ───────────────────────────────── */
+.audience-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin: 2rem 0 1.5rem;
+  overflow-x: auto;
+}
+.audience-tab {
+  background: transparent;
+  border: none;
+  padding: 0.85rem 1.5rem;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+  white-space: nowrap;
+}
+.audience-tab:hover { color: var(--text); }
+.audience-tab[aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.audience-tab .audience-tab-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: var(--fw-regular);
+  margin-top: 0.15rem;
+}
+.audience-panel { display: none; }
+.audience-panel[data-active="true"] { display: block; }
+
+/* ── Top-3-Action-Cards (C.5) ──────────────────────────── */
+.top-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+.top-action-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  padding: 1rem 1.15rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.top-action-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.top-action-card[data-severity="critical"] { border-left-color: var(--red); }
+.top-action-card[data-severity="error"] { border-left-color: var(--red); }
+.top-action-card[data-severity="warning"] { border-left-color: var(--yellow); }
+.top-action-card[data-severity="info"] { border-left-color: var(--accent); }
+.top-action-title {
+  font-weight: var(--fw-bold);
+  color: var(--text);
+  font-size: 1rem;
+}
+.top-action-impact {
+  font-size: 0.85rem;
+  color: var(--green);
+  font-weight: var(--fw-medium);
+}
+.top-action-link {
+  margin-top: auto;
+  font-size: 0.85rem;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: var(--fw-medium);
+}
+.top-action-link:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* ── Klickbare Cell-Refs (C.6) ─────────────────────────── */
+.cell-ref {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1rem 0.45rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+  user-select: all;
+}
+.cell-ref:hover {
+  background: var(--bg-info-soft);
+  border-color: var(--accent);
+}
+.cell-ref:active { transform: translateY(1px); }
+
+/* Toast für Clipboard-Feedback */
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  background: var(--text);
+  color: var(--card);
+  padding: 0.6rem 1.1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: var(--fw-medium);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+  z-index: var(--z-toast);
+}
+.toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ── Severity-Filter-Pills (C.7) ───────────────────────── */
+.severity-pills {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+.severity-pill {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: var(--fw-medium);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out),
+              color var(--duration-fast) var(--ease-out);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.severity-pill:hover { color: var(--text); border-color: var(--muted); }
+.severity-pill[aria-pressed="true"] {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.severity-pill[data-severity="critical"][aria-pressed="true"],
+.severity-pill[data-severity="error"][aria-pressed="true"] {
+  background: var(--red);
+  border-color: var(--red);
+}
+.severity-pill[data-severity="warning"][aria-pressed="true"] {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #1f1300;
+}
+.severity-pill[data-severity="info"][aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Findings-Accordion (C.7) ──────────────────────────── */
+.finding-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+  transition: box-shadow var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+.finding-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.finding-card[data-hidden="true"] { display: none; }
+.finding-summary {
+  list-style: none;
+  padding: 0.9rem 1.15rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-weight: var(--fw-medium);
+}
+.finding-summary::-webkit-details-marker { display: none; }
+.finding-summary::after {
+  content: '▸';
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform var(--duration-base) var(--ease-out);
+  font-family: var(--font-mono);
+}
+.finding-card[open] .finding-summary::after { transform: rotate(90deg); }
+.finding-body {
+  padding: 0 1.15rem 1rem 1.15rem;
+  color: var(--text);
+  line-height: 1.55;
+}
+.finding-body p { margin: 0.35rem 0; }
+
+/* Severity-Badge im Accordion-Summary */
+.sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.sev-critical { background: var(--bg-error-soft); color: var(--red); }
+.sev-error    { background: var(--bg-error-soft); color: var(--red); }
+.sev-warning  { background: var(--bg-warn-soft);  color: var(--yellow); }
+.sev-info     { background: var(--bg-info-soft);  color: var(--accent); }
+.sev svg { width: 14px; height: 14px; stroke-width: 2.25; }
+
+/* ── Anti-Pattern Grade-Klassen (C.9) ──────────────────────
+   Wirken als Background-Modifier ohne Padding/Border-Overrides,
+   damit sie auf `.ap-card` ohne Layout-Konflikt appliziert werden. */
+.ap-card.grade-mega,
+.ap-card-back.grade-mega {
+  background: var(--bg-error-soft);
+  border: 1px solid var(--red);
+}
+.ap-card.grade-echt,
+.ap-card-back.grade-echt {
+  background: var(--bg-warn-soft);
+  border: 1px solid var(--yellow);
+}
+.ap-card.grade-schoen,
+.ap-card-back.grade-schoen {
+  background: var(--bg-info-soft);
+  border: 1px solid var(--accent);
+}
+
+/* ── Panels für Governance/Migration-Tabs (C.4) ────────── */
+.audience-panel-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+.audience-panel-section h3 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.05rem;
+  font-weight: var(--fw-bold);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.audience-panel-section h3 svg { width: 18px; height: 18px; stroke-width: 2; }
+.audience-panel-section .muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.panel-placeholder {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+/* ── Page-Fade-In (Phase 2 B.3) ────────────────────────── */
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  body > .container,
+  body > main {
+    animation: page-fade-in var(--duration-slow) var(--ease-out) both;
+  }
+}
+
+/* ── Reduced-Motion-Schutz ─────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }

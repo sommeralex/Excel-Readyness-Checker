@@ -12,7 +12,7 @@ from typing import List
 import json as _json
 
 from excel_checker.models import (
-    Category, Finding, Recommendation, RecommendationType,
+    Category, ColumnProfile, Finding, Recommendation, RecommendationType,
     Severity, WorkbookReport,
 )
 
@@ -191,6 +191,101 @@ def _score_label(score: int) -> str:
     elif score >= 40:
         return "Handlungsbedarf"
     return "Dringender Handlungsbedarf"
+
+
+def _compute_compliance_score(report: 'WorkbookReport') -> tuple[int, str, list[tuple[str, str, str]]]:
+    """Berechnet Compliance-Score (0-100, höher = weniger Risiko).
+
+    Returns: (score, color, risks) mit risks = [(icon, title, desc), ...].
+    Solange PII-Regeln noch nicht existieren (Phase A), gehen Critical-Findings
+    und implizites Wissen als Proxy in die Berechnung ein.
+    """
+    pii_count = sum(1 for f in report.findings if f.rule_id.startswith("PII-"))
+    critical_count = report.critical_count
+    imp_count = sum(1 for f in report.findings if f.rule_id.startswith("IMP-"))
+
+    risks: list[tuple[str, str, str]] = []
+    if pii_count > 0:
+        risks.append(("🔐", f"{pii_count}× Verdacht auf sensible Daten",
+                      "E-Mail, IBAN oder Sozialversicherungsnummer in Zellen erkannt"))
+    if critical_count > 0:
+        risks.append(("⚠️", f"{critical_count}× kritisches Problem",
+                      "Datenintegrität gefährdet — Governance-relevant"))
+    if imp_count > 0:
+        risks.append(("🧠", f"{imp_count}× implizites Wissen",
+                      "Farbcodes, versteckte Blätter, undokumentierte Logik"))
+
+    penalty = pii_count * 15 + critical_count * 20 + imp_count * 5
+    score = max(0, 100 - penalty)
+    color = "#16a34a" if score >= 70 else "#ca8a04" if score >= 40 else "#dc2626"
+    return score, color, risks
+
+
+def _humanize(rule_id: str, fallback: str) -> str:
+    """Ersetzt technischen Jargon durch Mitarbeiter-verständliche Titel.
+
+    Fallback = original message. Rückgabe bleibt HTML-sicher — Caller muss
+    bei Bedarf _esc() anwenden.
+    """
+    HUMANIZE = {
+        "STR-001": "Verbundene Zellen stören maschinelle Lesbarkeit",
+        "STR-002": "Gemischte Datentypen in einer Spalte",
+        "STR-003": "Kopfzeile fehlt oder ist unklar",
+        "STR-004": "Leerzeilen unterbrechen den Datenbereich",
+        "STR-005": "Uneinheitliche Identifier",
+        "STR-006": "Eindeutige Schlüsselspalte fehlt",
+        "STR-007": "IDs aus Freitext statt sortierbarer Codes",
+        "FRM-001": "Zu viele fixe $-Bezüge",
+        "FRM-002": "Volatile Funktionen verlangsamen die Datei",
+        "FRM-003": "SVERWEIS-Ketten ersetzen eine Datenbank",
+        "FRM-004": "Zirkelbezug — unberechenbares Ergebnis",
+        "FRM-005": "Externe Datei-Verknüpfung",
+        "FRM-006": "Formel liefert Fehlerwert",
+        "VOL-001": "Datenvolumen überschreitet Excel-Grenzen",
+        "VOL-002": "Zu viele Formeln — Stabilitätsrisiko",
+        "VOL-003": "Zu viele Tabellenblätter",
+        "VOL-004": "Dateigröße sehr hoch",
+        "IMP-001": "Farbcodes tragen undokumentierte Bedeutung",
+        "IMP-002": "Versteckte Tabellenblätter",
+        "IMP-003": "Ausgeblendete Zeilen oder Spalten",
+        "IMP-004": "Geschäftslogik steckt in bedingter Formatierung",
+        "IMP-005": "Hartcodierte Zahlen in Formeln",
+        "IMP-006": "Dropdown mit hardcodierten Werten",
+        "IMP-007": "Generischer Blatt-Name",
+        "IMP-008": "Geschäftsregel nur im Kommentar",
+        "IMP-009": "Irreführendes Zahlenformat",
+        "IMP-010": "Geschützter Bereich ohne Hinweis",
+    }
+    return HUMANIZE.get(rule_id, fallback)
+
+
+def _html_score_gauge(label: str, value: int, color: str,
+                      hint: str = "", tooltip: str = "") -> str:
+    """Rendert einen animierten Score-Ring.
+
+    Nutzt --gauge-value (CSS @property aus theme.css) für Stroke-Animation.
+    Breite/Höhe des SVG: 110×110, Radius 40, Umfang 2π·40 ≈ 251.2.
+    """
+    safe_label = _esc(label)
+    safe_hint = _esc(hint)
+    safe_tooltip = _esc(tooltip or f"{label}: {value} von 100")
+    return f"""
+<div class="score-gauge-card" title="{safe_tooltip}">
+  <div class="score-gauge" style="--gauge-value:{value}; width:110px; height:110px; margin:0 auto; position:relative;">
+    <svg width="110" height="110" style="transform:rotate(-90deg);">
+      <circle cx="55" cy="55" r="40" fill="none" stroke="var(--border)" stroke-width="8"
+              class="report-svg-ring-bg"/>
+      <circle cx="55" cy="55" r="40" fill="none" stroke="{color}" stroke-width="8"
+              stroke-linecap="round" class="gauge-ring-fg"/>
+    </svg>
+    <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center;">
+      <div class="score-gauge-value" style="color:{color};">{value}</div>
+    </div>
+  </div>
+  <div class="score-gauge-label">{safe_label}</div>
+  <div class="score-gauge-hint" style="font-size:0.8rem;color:var(--muted);margin-top:0.25rem;">{safe_hint}</div>
+</div>
+"""
 
 
 def _esc(text: str | None) -> str:
@@ -388,7 +483,10 @@ def generate_html(report: WorkbookReport) -> str:
     # KI-Readiness berechnen (brauchen wir für Hero + Effizienz)
     ai_ready, ai_ready_color, ai_blockers = _compute_ai_readiness(report)
 
-    # DB-Readiness Durchschnitt
+    # Compliance-Score (Phase 2 C.2) — Governance-Ring
+    compliance_score, compliance_color, compliance_risks = _compute_compliance_score(report)
+
+    # DB-Readiness Durchschnitt (wandert in Migration-Tab, wird aber für Hero-Kurzprofil gebraucht)
     total_rows = sum(s.row_count for s in report.sheet_stats)
     if total_rows > 0:
         avg_db = int(sum(s.db_readiness * max(s.row_count, 1) for s in report.sheet_stats) / max(total_rows, 1))
@@ -403,30 +501,11 @@ def generate_html(report: WorkbookReport) -> str:
             count = sum(1 for ff in report.findings if ff.rule_id == f.rule_id)
             detected_ap[f.rule_id] = (name, icon, desc, count, grade)
 
-    # Findings nach Kategorie gruppieren – Implizites Wissen als eigene virtuelle Kategorie
-    CAT_LABELS = {
-        "structure": ("Struktur", "🏗️"),
-        "formula": ("Formeln", "📐"),
-        "volume": ("Volumen", "📦"),
-        "implicit": ("Implizites Wissen", "🧠"),
-    }
-    findings_by_tab: dict[str, List[Finding]] = defaultdict(list)
-    for f in report.findings:
-        if f.rule_id.startswith("IMP-"):
-            findings_by_tab["implicit"].append(f)
-        elif f.category == Category.STRUCTURE:
-            findings_by_tab["structure"].append(f)
-        elif f.category == Category.FORMULA:
-            findings_by_tab["formula"].append(f)
-        elif f.category == Category.VOLUME:
-            findings_by_tab["volume"].append(f)
-    # Leere entfernen
-    findings_by_tab = {k: v for k, v in findings_by_tab.items() if v}
-
     # HTML zusammenbauen
     parts = [_html_head(filename, now)]
     parts.append(_html_hero(score, score_color, score_label, report, dims,
-                            ai_ready, ai_ready_color, avg_db))
+                            ai_ready, ai_ready_color, avg_db,
+                            compliance_score, compliance_color))
     parts.append(_html_score_breakdown(report))
     parts.append(_html_stats_section(report))
 
@@ -440,8 +519,9 @@ def generate_html(report: WorkbookReport) -> str:
     if report.recommendations:
         parts.append(_html_recommendations_tabs(report.recommendations))
 
-    if findings_by_tab:
-        parts.append(_html_findings_tabs(findings_by_tab, CAT_LABELS))
+    if report.findings:
+        parts.append(_html_audience_tabs(report.findings, compliance_score,
+                                         compliance_risks, report, avg_db))
 
     # Report-Kontext als verstecktes JSON einbetten (für LLM-Analyse ohne Server-State)
     try:
@@ -532,10 +612,10 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
 .ap-card-back .ap-location {{ font-size: 0.82rem; color: var(--text); margin-bottom: 0.25rem; word-break: break-all; }}
 .ap-card-back .ap-location .loc-icon {{ margin-right: 0.25rem; }}
 .ap-card-back .ap-show-all-btn {{ display: inline-block; margin-top: 0.5rem; padding: 0.3rem 0.75rem; font-size: 0.75rem; font-weight: 600; border-radius: 6px; border: 1px solid var(--border); background: white; color: var(--accent); cursor: pointer; transition: background 0.15s; }}
-.ap-card-back .ap-show-all-btn:hover {{ background: #eff6ff; }}
-.ap-card-back .ap-all-locations {{ display: none; margin-top: 0.5rem; max-height: 110px; overflow-y: auto; text-align: left; width: 100%; padding: 0.25rem 0.5rem; font-size: 0.78rem; background: #f8fafc; border-radius: 6px; box-sizing: border-box; }}
+.ap-card-back .ap-show-all-btn:hover {{ background: var(--bg-info-soft); }}
+.ap-card-back .ap-all-locations {{ display: none; margin-top: 0.5rem; max-height: 110px; overflow-y: auto; text-align: left; width: 100%; padding: 0.25rem 0.5rem; font-size: 0.78rem; background: var(--bg); border-radius: 6px; box-sizing: border-box; }}
 .ap-card-back .ap-all-locations.visible {{ display: block; }}
-.ap-card-back .ap-all-locations li {{ padding: 0.2rem 0; border-bottom: 1px solid #f1f5f9; list-style: none; word-break: break-all; }}
+.ap-card-back .ap-all-locations li {{ padding: 0.2rem 0; border-bottom: 1px solid var(--border); list-style: none; word-break: break-all; }}
 .ap-card-back .ap-all-locations li:last-child {{ border-bottom: none; }}
 
   /* Complexity Charts */
@@ -574,27 +654,27 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
   .finding .detail {{ font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; }}
   .finding .suggestion {{
     font-size: 0.85rem; margin-top: 0.5rem;
-    padding: 0.5rem 0.75rem; background: rgba(59,130,246,0.06);
-    border-radius: 6px; color: #1e40af;
+    padding: 0.5rem 0.75rem; background: var(--bg-info-soft);
+    border-radius: 6px; color: var(--accent);
   }}
   .finding .ap-label {{
     display: inline-block; padding: 0.1rem 0.5rem; margin-left: 0.5rem;
-    background: #fef3c7; color: #92400e; border-radius: 4px;
+    background: var(--bg-warn-soft); color: var(--yellow); border-radius: 4px;
     font-size: 0.7rem; font-weight: 600;
   }}
 
   /* Recommendations */
   .rec {{
     padding: 1.25rem; margin-bottom: 1rem; border-radius: 10px;
-    background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-    border: 1px solid #bfdbfe;
+    background: var(--bg-info-soft);
+    border: 1px solid var(--border);
   }}
   .rec .prio {{ font-size: 0.75rem; color: var(--accent); font-weight: 600; text-transform: uppercase; }}
   .rec h3 {{ margin: 0.25rem 0 0.5rem; font-size: 1.05rem; }}
   .rec .reason {{ font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem; }}
   .rec .action {{
     font-size: 0.9rem; padding: 0.75rem;
-    background: white; border-radius: 8px; border: 1px solid #e0e7ff;
+    background: var(--card); border-radius: 8px; border: 1px solid var(--border);
   }}
 
   .badge {{
@@ -617,11 +697,11 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
   .action-download {{
     background: var(--accent); color: white;
   }}
-  .action-download:hover {{ background: #2563eb; }}
+  .action-download:hover {{ background: var(--accent-hover); }}
   .action-new {{
-    background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0;
+    background: var(--bg-ok-soft); color: var(--green); border: 1px solid var(--border);
   }}
-  .action-new:hover {{ background: #dcfce7; }}
+  .action-new:hover {{ background: var(--bg-success-soft); }}
 
   .footer {{
     text-align: center; padding: 1.5rem; color: var(--muted);
@@ -634,25 +714,25 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
   }}
   .sheet-table th {{
     padding: 0.6rem 0.75rem; text-align: left;
-    background: #f1f5f9; border-bottom: 2px solid var(--border);
+    background: var(--bg); border-bottom: 2px solid var(--border);
     font-weight: 600; font-size: 0.8rem; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.03em;
   }}
   .sheet-table td {{
-    padding: 0.5rem 0.75rem; border-bottom: 1px solid #f1f5f9;
+    padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border);
   }}
-  .sheet-table tr:hover {{ background: #f8fafc; }}
+  .sheet-table tr:hover {{ background: var(--bg); }}
   .sheet-table .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
   .phantom-badge {{
     display: inline-block; padding: 0.1rem 0.4rem; margin-left: 0.4rem;
-    background: #fef3c7; color: #92400e; border-radius: 4px;
+    background: var(--bg-warn-soft); color: var(--yellow); border-radius: 4px;
     font-size: 0.65rem; font-weight: 600;
   }}
   .db-bar {{
     display: flex; align-items: center; gap: 0.5rem;
   }}
   .db-bar-track {{
-    flex: 1; height: 6px; background: #e2e8f0; border-radius: 3px;
+    flex: 1; height: 6px; background: var(--border); border-radius: 3px;
     overflow: hidden;
   }}
   .db-bar-fill {{
@@ -712,14 +792,14 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
   }}
   .eff-metric {{
     display: flex; justify-content: space-between; align-items: center;
-    padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9;
+    padding: 0.5rem 0; border-bottom: 1px solid var(--border);
     font-size: 0.85rem;
   }}
   .eff-metric:last-child {{ border-bottom: none; }}
   .eff-metric .label {{ color: var(--muted); }}
   .eff-metric .value {{ font-weight: 700; font-size: 1rem; }}
-  .eff-metric .value.red {{ color: #dc2626; }}
-  .eff-metric .value.green {{ color: #16a34a; }}
+  .eff-metric .value.red {{ color: var(--red); }}
+  .eff-metric .value.green {{ color: var(--green); }}
   .eff-metric .value.blue {{ color: var(--accent); }}
   .eff-bar {{
     height: 8px; border-radius: 4px; background: #e2e8f0;
@@ -731,24 +811,24 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
   }}
   .eff-summary {{
     padding: 1.25rem; border-radius: 10px;
-    background: linear-gradient(135deg, #fef9c3 0%, #fef3c7 100%);
-    border: 1px solid #fde68a;
+    background: var(--bg-warning-soft);
+    border: 1px solid var(--border);
     font-size: 0.9rem; line-height: 1.7;
   }}
-  .eff-summary strong {{ color: #92400e; }}
+  .eff-summary strong {{ color: var(--yellow); }}
   .ai-potential {{
     padding: 1.25rem; border-radius: 10px;
-    background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-    border: 1px solid #bfdbfe;
+    background: var(--bg-info-soft);
+    border: 1px solid var(--border);
     font-size: 0.9rem; line-height: 1.7;
   }}
-  .ai-potential strong {{ color: #1e40af; }}
+  .ai-potential strong {{ color: var(--accent); }}
   .ai-blocker-list {{
     list-style: none; padding: 0; margin: 0.5rem 0;
   }}
   .ai-blocker-list li {{
-    padding: 0.4rem 0; font-size: 0.85rem; color: #334155;
-    border-bottom: 1px solid rgba(59,130,246,0.1);
+    padding: 0.4rem 0; font-size: 0.85rem; color: var(--text);
+    border-bottom: 1px solid var(--border);
   }}
   .ai-blocker-list li:last-child {{ border-bottom: none; }}
 
@@ -785,70 +865,41 @@ details.card[open] > summary h2 {{ margin-bottom: 0; padding-bottom: 0; border-b
 
 def _html_hero(score: int, color: str, label: str,
                report: WorkbookReport, dims: dict[str, float],
-               ai_ready: int, ai_ready_color: str, avg_db: int) -> str:
-    avg_db_color = _db_readiness_color(avg_db)
+               ai_ready: int, ai_ready_color: str, avg_db: int,
+               compliance_score: int, compliance_color: str) -> str:
     radar = _radar_chart_svg(dims)
 
     ai_label = ('Bereit für KI' if ai_ready >= 70
                 else 'Nach Bereinigung' if ai_ready >= 40
                 else 'Erheblicher Aufwand')
-    db_label = _db_readiness_label(avg_db)
+    compliance_label = ('Kein erkennbares Risiko' if compliance_score >= 80
+                        else 'Geringes Risiko' if compliance_score >= 60
+                        else 'Mittleres Risiko' if compliance_score >= 40
+                        else 'Hohes Risiko')
+
+    gauge_quality = _html_score_gauge(
+        "Datenqualität", score, color,
+        hint=_esc(label),
+        tooltip="Datenqualität: wie sauber sind die Daten für Mitarbeiter, die täglich damit arbeiten?",
+    )
+    gauge_compliance = _html_score_gauge(
+        "Compliance", compliance_score, compliance_color,
+        hint=compliance_label,
+        tooltip="Compliance: Risiko aus sensiblen Daten und undokumentierter Logik. Höher = weniger Risiko.",
+    )
+    gauge_ai = _html_score_gauge(
+        "AI-Readiness", ai_ready, ai_ready_color,
+        hint=_esc(ai_label),
+        tooltip="AI-Readiness: wie gut eignen sich die Daten für KI-Auswertungen und Datenbank-Migration?",
+    )
 
     return f"""
 <div class="card">
   <h2>🎯 Gesamtbewertung</h2>
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:0.75rem;">
-    <div style="text-align:center;">
-      <div class="score-ring">
-        <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
-          <circle cx="55" cy="55" r="40" fill="none" stroke="{color}" stroke-width="8"
-                  stroke-dasharray="{score / 100 * 251:.0f} 251" stroke-linecap="round"/>
-        </svg>
-        <div class="score-ring-text" style="text-align:center;">
-          <div class="value" style="color:{color};">{score}</div>
-          <div class="label">von 100</div>
-        </div>
-      </div>
-      <div class="score-text">
-        <strong style="color:{color};">⚕️ Bewertung</strong><br>
-        <span style="color:var(--muted);">{_esc(label)}</span>
-      </div>
-    </div>
-    <div style="text-align:center;">
-      <div class="score-ring">
-        <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
-          <circle cx="55" cy="55" r="40" fill="none" stroke="{ai_ready_color}" stroke-width="8"
-                  stroke-dasharray="{ai_ready / 100 * 251:.0f} 251" stroke-linecap="round"/>
-        </svg>
-        <div class="score-ring-text" style="text-align:center;">
-          <div class="value" style="color:{ai_ready_color};">{ai_ready}</div>
-          <div class="label">von 100</div>
-        </div>
-      </div>
-      <div class="score-text">
-        <strong style="color:{ai_ready_color};">🤖 KI-Eignung</strong><br>
-        <span style="color:var(--muted);">{_esc(ai_label)}</span>
-      </div>
-    </div>
-    <div style="text-align:center;">
-      <div class="score-ring">
-        <svg width="110" height="110">
-          <circle cx="55" cy="55" r="40" fill="none" stroke="#e2e8f0" stroke-width="8" class="report-svg-ring-bg"/>
-          <circle cx="55" cy="55" r="40" fill="none" stroke="{avg_db_color}" stroke-width="8"
-                  stroke-dasharray="{avg_db / 100 * 251:.0f} 251" stroke-linecap="round"/>
-        </svg>
-        <div class="score-ring-text" style="text-align:center;">
-          <div class="value" style="color:{avg_db_color};">{avg_db}</div>
-          <div class="label">von 100</div>
-        </div>
-      </div>
-      <div class="score-text">
-        <strong style="color:{avg_db_color};">🗄️ DB-Readiness</strong><br>
-        <span style="color:var(--muted);">{_esc(db_label)}</span>
-      </div>
-    </div>
+  <div class="score-gauge-group">
+    {gauge_quality}
+    {gauge_compliance}
+    {gauge_ai}
   </div>
   <div style="text-align:center;padding:0.25rem 0 0.75rem;font-size:0.8rem;color:var(--muted);">
     {report.critical_count} kritisch &middot;
@@ -1174,13 +1225,16 @@ def _html_per_sheet_section(report: WorkbookReport) -> str:
     </div>
   </div>""")
 
-        # Sheet Findings
+        # Sheet Findings (Phase 2 C.7: Accordion-Cards via _render_finding_card)
         if sheet_findings:
             parts.append(
                 f'<h3 style="font-size:0.9rem;color:var(--muted);margin-bottom:0.5rem;">'
                 f'📋 Ergebnisse ({len(sheet_findings)})</h3>'
             )
-            _render_findings(parts, sheet_findings)
+            sev_order = {Severity.CRITICAL: 0, Severity.ERROR: 1,
+                         Severity.WARNING: 2, Severity.INFO: 3}
+            for f in sorted(sheet_findings, key=lambda x: sev_order.get(x.severity, 9)):
+                parts.append(_render_finding_card(f))
         else:
             parts.append(
                 '<div style="text-align:center;padding:1.5rem;color:var(--muted);">'
@@ -1221,11 +1275,17 @@ def _html_anti_patterns(detected: dict[str, tuple[str, str, str, int, str]],
         '<details class="card" open>',
         f'<summary><h2>⚠️ Erkannte Anti-Patterns ({len(detected)})</h2></summary>',
     ]
+    # Mapping vom Grade-Label auf eine CSS-Klasse (theme.css steuert Light+Dark)
+    grade_class_map = {
+        GRADE_MEGA: "grade-mega",
+        GRADE_ECHT: "grade-echt",
+        GRADE_SCHOEN: "grade-schoen",
+    }
     for grade in sorted_grades:
         items = by_grade[grade]
-        grade_icon, grade_color, grade_bg = ANTI_PATTERN_GRADES.get(
+        grade_icon, grade_color, _ = ANTI_PATTERN_GRADES.get(
             grade, ("⚪", "#6b7280", "#f9fafb"))
-        border_color = grade_color + "40"  # 25% opacity
+        grade_cls = grade_class_map.get(grade, "grade-schoen")
 
         parts.append(f'<div class="ap-grade-section">')
         parts.append(
@@ -1247,14 +1307,14 @@ def _html_anti_patterns(detected: dict[str, tuple[str, str, str, int, str]],
             parts.append(f"""
     <div class="ap-flip-container" onclick="this.classList.toggle('flipped')">
       <div class="ap-flip-inner">
-        <div class="ap-card" style="background:linear-gradient(135deg,{grade_bg} 0%,#ffffff 100%);border:1px solid {border_color};">
+        <div class="ap-card {grade_cls}">
           <div class="ap-icon">{icon}</div>
           <div class="ap-name">{_esc(name)}</div>
           <div class="ap-desc">{_esc(desc)}</div>
           <div class="ap-count" style="background:{grade_color};">{count}× gefunden</div>
           <span class="ap-flip-hint">klicken zum Umdrehen ↻</span>
         </div>
-        <div class="ap-card-back" style="background:linear-gradient(135deg,#ffffff 0%,{grade_bg} 100%);border:1px solid {border_color};">
+        <div class="ap-card-back {grade_cls}">
           {back_html}
         </div>
       </div>
@@ -1344,7 +1404,7 @@ def _html_efficiency_section(report: WorkbookReport,
 
     # ── Linke Box: Zeitverlust ──
     parts.append(
-        '<div class="eff-box" style="background:#fefce8;">'
+        '<div class="eff-box" style="background:var(--bg-warn-soft);">'
         '<h3>⏱️ Geschätzter Zeitverlust durch manuelle Pflege</h3>'
     )
     parts.append(f"""
@@ -1379,7 +1439,7 @@ def _html_efficiency_section(report: WorkbookReport,
 
     # ── Rechte Box: KI-Readiness ──
     parts.append(
-        '<div class="eff-box" style="background:#eff6ff;">'
+        '<div class="eff-box" style="background:var(--bg-info-soft);">'
         '<h3>🤖 KI-Readiness dieser Datei</h3>'
     )
     parts.append(f"""
@@ -1515,76 +1575,422 @@ def _html_recommendations_tabs(recs: list[Recommendation]) -> str:
     return "\n".join(parts)
 
 
-def _html_findings_tabs(findings_by_cat: dict, cat_labels: dict) -> str:
-    """Findings als Tabs nach Kategorie."""
-    tab_id = "find"
-    cats = list(findings_by_cat.keys())
+# ── Audience-Mapping (Phase 2 C.4) ─────────────────────────
+# Welche Finding-Kategorie ist für welche Zielgruppe relevant?
+# Schlüssel: Category-Value aus models.Category ODER "implicit"/"pii"/"profile"
+# als virtuelle Kategorien (per rule_id-Präfix unterschieden).
+CATEGORY_TO_AUDIENCES: dict[str, set[str]] = {
+    "structure": {"was_tun", "migration"},
+    "formula":   {"was_tun", "migration"},
+    "volume":    {"was_tun", "migration"},
+    "implicit":  {"was_tun", "governance"},
+    "pii":       {"governance", "was_tun"},
+    "profile":   {"migration"},
+}
 
-    parts = ['<details class="card">', '<summary><h2>🔍 Detaillierte Ergebnisse</h2></summary>']
+AUDIENCE_ORDER = ("was_tun", "governance", "migration")
+AUDIENCE_LABELS = {
+    "was_tun":    ("Was tun?",   "Mitarbeiter — konkrete Fixes"),
+    "governance": ("Governance", "Compliance, PII, Audit-Nachweis"),
+    "migration":  ("Migration / AI", "Datenbank & KI-Auswertung"),
+}
 
-    # Tab-Buttons
-    parts.append(f'<div class="tabs" id="{tab_id}-tabs">')
-    for i, cat in enumerate(cats):
-        label, icon = cat_labels.get(cat, (cat, "📄"))
-        count = len(findings_by_cat[cat])
-        active = " active" if i == 0 else ""
+
+def _finding_virtual_category(f: Finding) -> str:
+    """Liefert die virtuelle Audience-Kategorie eines Findings."""
+    if f.rule_id.startswith("PII-"):
+        return "pii"
+    if f.rule_id.startswith("PRF-"):
+        return "profile"
+    if f.rule_id.startswith("IMP-"):
+        return "implicit"
+    if f.category == Category.STRUCTURE:
+        return "structure"
+    if f.category == Category.FORMULA:
+        return "formula"
+    if f.category == Category.VOLUME:
+        return "volume"
+    return "structure"
+
+
+def _audiences_for(f: Finding) -> set[str]:
+    return CATEGORY_TO_AUDIENCES.get(_finding_virtual_category(f), {"was_tun"})
+
+
+# ── Lucide-Inline-Icons (Phase 2 C.8) ──────────────────────
+# Minimales Inventar; stroke wird per currentColor gesetzt, damit
+# die sev-*-Klassen aus theme.css die Farbe steuern.
+_LUCIDE: dict[str, str] = {
+    "alert-circle":   '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    "alert-triangle": '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    "info":           '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+    "check-circle":   '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+    "database":       '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+    "bar-chart-3":    '<path d="M3 3v18h18"/><path d="M8 17V9"/><path d="M13 17V5"/><path d="M18 17v-3"/>',
+    "users":          '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    "shield":         '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    "target":         '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    "zap":            '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    "arrow-right":    '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+    "copy":           '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+    "file-spreadsheet": '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h8"/><path d="M8 17h8"/>',
+}
+
+
+def _lucide(name: str, cls: str = "") -> str:
+    """Rendert ein Lucide-Icon als Inline-SVG."""
+    body = _LUCIDE.get(name, _LUCIDE["info"])
+    cls_attr = f' class="{cls}"' if cls else ""
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
+        f'fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round"{cls_attr}>{body}</svg>'
+    )
+
+
+_SEVERITY_ICON = {
+    Severity.CRITICAL: "alert-triangle",
+    Severity.ERROR: "alert-circle",
+    Severity.WARNING: "alert-triangle",
+    Severity.INFO: "info",
+}
+
+_SEVERITY_LABEL_DE = {
+    Severity.CRITICAL: "Kritisch",
+    Severity.ERROR: "Fehler",
+    Severity.WARNING: "Warnung",
+    Severity.INFO: "Info",
+}
+
+
+def _format_location(f: Finding) -> str:
+    """Erzeugt einen Fundort-String mit klickbarer Cell-Ref (Phase 2 C.6)."""
+    parts = []
+    if f.sheet:
+        parts.append(f'Blatt: <strong>{_esc(f.sheet)}</strong>')
+    if f.cell:
+        safe_cell = _esc(f.cell)
         parts.append(
-            f'<button class="tab-btn{active}" '
-            f'onclick="switchTab(\'{tab_id}\', \'{cat}\')">'
-            f'{icon} {_esc(label)} ({count})</button>'
+            f'Zelle: <code class="cell-ref" data-cell="{safe_cell}" '
+            f'onclick="copyCellRef(this)" title="Klicken zum Kopieren">{safe_cell}</code>'
         )
-    parts.append('</div>')
-
-    # Tab-Inhalte
-    for i, cat in enumerate(cats):
-        active = " active" if i == 0 else ""
-        parts.append(f'<div class="tab-content{active}" data-tab-group="{tab_id}" data-tab="{cat}">')
-        _render_findings(parts, findings_by_cat[cat])
-        parts.append('</div>')
-
-    parts.append('</details>')
-    return "\n".join(parts)
+    return ' &middot; '.join(parts)
 
 
-def _render_findings(parts: list[str], findings: list) -> None:
-    """Rendert Finding-Karten in die parts-Liste."""
-    for f in sorted(findings, key=lambda x: list(Severity).index(x.severity)):
-      color, bg, icon = SEVERITY_COLORS.get(
-        f.severity, ("#6b7280", "#f9fafb", "⚪")
-      )
-      # Anti-Pattern Label mit Schweregrad
-      ap_label = ""
-      if f.rule_id in ANTI_PATTERNS:
-        ap_name, ap_icon, _, ap_grade = ANTI_PATTERNS[f.rule_id]
-        grade_icon, grade_color, _ = ANTI_PATTERN_GRADES.get(
-          ap_grade, ("⚪", "#6b7280", "#f9fafb"))
-        ap_label = (
-          f'<span class="ap-label">{ap_icon} {_esc(ap_name)}</span>'
-          f'<span class="ap-label" style="background:{grade_color}15;'
-          f'color:{grade_color};border-color:{grade_color}40;">'
-          f'{grade_icon} {_esc(ap_grade)}</span>'
+def _render_finding_card(f: Finding) -> str:
+    """Rendert ein Finding als Accordion-Card (Phase 2 C.7)."""
+    sev = f.severity
+    sev_cls = f"sev sev-{sev.value}"
+    sev_label = _SEVERITY_LABEL_DE.get(sev, sev.value.capitalize())
+    sev_icon = _lucide(_SEVERITY_ICON.get(sev, "info"))
+
+    title = _humanize(f.rule_id, f.message)
+    location = _format_location(f)
+
+    body_parts = [f'<p>{_esc(f.message)}</p>']
+    if location:
+        body_parts.append(f'<p class="finding-location" style="color:var(--muted); font-size:0.9rem;">{location}</p>')
+    if f.detail:
+        body_parts.append(f'<p><strong>Details:</strong> {_esc(f.detail)}</p>')
+    if f.suggestion:
+        body_parts.append(
+            f'<p style="margin-top:0.5rem; padding:0.6rem 0.85rem; '
+            f'background:var(--bg-info-soft); border-radius:6px;">'
+            f'💡 {_esc(f.suggestion)}</p>'
+        )
+    if f.rule_id:
+        body_parts.append(
+            f'<p style="font-size:0.75rem; color:var(--muted); margin-top:0.5rem;">Regel: <code>{_esc(f.rule_id)}</code>'
+            + (f' &middot; {_esc(f.sample_note)}' if f.sample_note else '')
+            + '</p>'
         )
 
-      # Fundort-String bauen
-      location = ""
-      if f.sheet and f.cell:
-        location = f'Sheet: {_esc(f.sheet)}, Zelle: {_esc(f.cell)}'
-      elif f.sheet:
-        location = f'Sheet: {_esc(f.sheet)}'
-      elif f.cell:
-        location = f'Zelle: {_esc(f.cell)}'
+    return (
+        f'<details class="finding-card" data-severity="{sev.value}" data-rule-id="{_esc(f.rule_id)}" id="finding-{_esc(f.rule_id)}-{id(f)}">\n'
+        f'  <summary class="finding-summary">'
+        f'<span class="{sev_cls}">{sev_icon} {_esc(sev_label)}</span>'
+        f'<span>{_esc(title)}</span>'
+        f'</summary>\n'
+        f'  <div class="finding-body">{"".join(body_parts)}</div>\n'
+        f'</details>'
+    )
 
-      parts.append(f"""
-    <div class="finding" style="border-color:{color}; background:{bg};">
-    <div class="title">{icon} {_esc(f.message)}{ap_label}</div>
-    <div class="meta">
-      <span class="badge" style="background:{color};color:white;">{_esc(f.severity.value.upper())}</span>
-      {f' &middot; {location}' if location else ''}
-      {f' &middot; Regel: {_esc(f.rule_id)}' if f.rule_id else ''}
-    </div>
-    {f'<div class="detail"><strong>Details:</strong> {_esc(f.detail)}</div>' if f.detail else ''}
-    {f'<div class="suggestion">💡 {_esc(f.suggestion)}</div>' if f.suggestion else ''}
-    </div>""")
+
+def _severity_filter_pills() -> str:
+    """Severity-Filter als Pills über der Accordion-Liste (Phase 2 C.7)."""
+    pills = [
+        ('all',      'Alle',     'info'),
+        ('critical', 'Kritisch', 'alert-triangle'),
+        ('error',    'Fehler',   'alert-circle'),
+        ('warning',  'Warnung',  'alert-triangle'),
+        ('info',     'Info',     'info'),
+    ]
+    html_pills = []
+    for sev, label, icon in pills:
+        pressed = 'true' if sev == 'all' else 'false'
+        html_pills.append(
+            f'<button class="severity-pill" data-severity="{sev}" '
+            f'aria-pressed="{pressed}" onclick="filterBySeverity(this)">'
+            f'{_lucide(icon)}<span>{_esc(label)}</span></button>'
+        )
+    return '<div class="severity-pills">' + ''.join(html_pills) + '</div>'
+
+
+def _html_top_actions(findings: list, limit: int = 3) -> str:
+    """Top-Actions mit Score-Impact-Teaser (Phase 2 C.5).
+
+    Sortiert Findings nach score_penalty, dedupliziert per rule_id,
+    nimmt die Top-N und rendert sie als Cards.
+    """
+    sev_order = {Severity.CRITICAL: 0, Severity.ERROR: 1, Severity.WARNING: 2, Severity.INFO: 3}
+    seen: set[str] = set()
+    impact_per_rule: dict[str, int] = defaultdict(int)
+    first_per_rule: dict[str, Finding] = {}
+    for f in findings:
+        impact_per_rule[f.rule_id] += f.score_penalty
+        if f.rule_id not in first_per_rule:
+            first_per_rule[f.rule_id] = f
+
+    ranked = sorted(
+        first_per_rule.values(),
+        key=lambda x: (-impact_per_rule[x.rule_id], sev_order.get(x.severity, 9))
+    )
+
+    cards = []
+    for f in ranked:
+        if f.rule_id in seen:
+            continue
+        seen.add(f.rule_id)
+        if len(cards) >= limit:
+            break
+        impact = impact_per_rule[f.rule_id]
+        if impact <= 0:
+            continue
+        title = _humanize(f.rule_id, f.message)
+        target_id = f'finding-{_esc(f.rule_id)}-{id(f)}'
+        teaser = f"Fix → +{impact} Punkte Datenqualität" if impact > 0 else "Kein direkter Score-Impact"
+        cards.append(
+            f'<div class="top-action-card" data-severity="{f.severity.value}">'
+            f'  <div class="top-action-title">{_lucide(_SEVERITY_ICON.get(f.severity, "info"))} {_esc(title)}</div>'
+            f'  <div class="top-action-impact">{_esc(teaser)}</div>'
+            f'  <a class="top-action-link" href="#{target_id}" onclick="scrollToFinding(\'{target_id}\')">Betroffene Zellen zeigen {_lucide("arrow-right")}</a>'
+            f'</div>'
+        )
+
+    if not cards:
+        return ''
+    return (
+        '<div class="audience-panel-section" style="background:transparent; border:none; box-shadow:none; padding:0;">'
+        f'<h3>{_lucide("target")} Top-{len(cards)} Actions</h3>'
+        f'<div class="top-actions">{"".join(cards)}</div>'
+        '</div>'
+    )
+
+
+def _audience_accordion(findings: list, audience: str) -> str:
+    """Rendert alle Findings der gegebenen Audience als sortierte Accordion-Liste."""
+    relevant = [f for f in findings if audience in _audiences_for(f)]
+    if not relevant:
+        return '<p class="panel-placeholder">Keine für diese Zielgruppe relevanten Funde.</p>'
+    sev_order = {Severity.CRITICAL: 0, Severity.ERROR: 1, Severity.WARNING: 2, Severity.INFO: 3}
+    relevant.sort(key=lambda x: (sev_order.get(x.severity, 9), -x.score_penalty))
+    cards = [_render_finding_card(f) for f in relevant]
+    return (
+        _severity_filter_pills()
+        + f'<div class="finding-list" data-audience="{audience}">'
+        + "\n".join(cards)
+        + '</div>'
+    )
+
+
+def _html_tab_was_tun(findings: list) -> str:
+    top = _html_top_actions([f for f in findings if 'was_tun' in _audiences_for(f)])
+    body = _audience_accordion(findings, 'was_tun')
+    return (
+        f'<div class="audience-panel" data-audience="was_tun" data-active="true">'
+        f'{top}'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("file-spreadsheet")} Alle Funde für Mitarbeiter</h3>'
+        f'{body}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def _html_pii_panel(findings: list) -> str:
+    """Rendert ein Panel mit PII-Findings, gruppiert nach Typ (Phase 2 A.4)."""
+    pii = [f for f in findings if f.rule_id.startswith("PII-")]
+    if not pii:
+        return (
+            '<div class="panel-placeholder">'
+            'Keine Verdachtstreffer auf E-Mail, IBAN, Sozialversicherungs- '
+            'oder Telefonnummer in den geprüften Zellen.'
+            '</div>'
+        )
+    from collections import defaultdict as _dd
+    by_rule: dict[str, list[Finding]] = _dd(list)
+    for f in pii:
+        by_rule[f.rule_id].append(f)
+    rows = []
+    for rid, items in sorted(by_rule.items()):
+        kind = items[0].rule_name
+        cells = ", ".join(
+            f'<code class="cell-ref" data-cell="{_esc(f.cell or "")}" onclick="copyCellRef(this)">{_esc((f.sheet or "") + "!" + (f.cell or ""))}</code>'
+            for f in items[:5] if f.cell
+        )
+        if len(items) > 5:
+            cells += f' <span class="muted">+{len(items) - 5} weitere</span>'
+        rows.append(
+            f'<li style="padding:0.6rem 0; border-bottom:1px solid var(--border);">'
+            f'<strong>{_esc(kind)}</strong> <span class="muted">({len(items)}×)</span><br>'
+            f'{cells}'
+            f'</li>'
+        )
+    return (
+        '<ul style="list-style:none; padding:0; margin:0;">' + ''.join(rows) + '</ul>'
+        + '<p class="muted" style="font-size:0.8rem; margin-top:0.6rem;">'
+        + 'Sensible Daten gehören nicht in frei geteilte Excel-Dateien. '
+        + 'Entfernen, pseudonymisieren oder in ein geschütztes System verlegen.'
+        + '</p>'
+    )
+
+
+def _html_tab_governance(findings: list, compliance_score: int,
+                         compliance_risks: list[tuple[str, str, str]]) -> str:
+    risk_list = ''.join(
+        f'<li style="padding:0.4rem 0; border-bottom:1px solid var(--border);">'
+        f'<span style="font-size:1.1rem; margin-right:0.4rem;">{icon}</span>'
+        f'<strong>{_esc(title)}</strong> — <span style="color:var(--muted);">{_esc(desc)}</span>'
+        f'</li>'
+        for icon, title, desc in compliance_risks
+    ) or '<li class="panel-placeholder" style="list-style:none;">Keine Governance-Risiken erkannt.</li>'
+
+    pii_html = _html_pii_panel(findings)
+    return (
+        f'<div class="audience-panel" data-audience="governance">'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("shield")} Compliance-Risiko</h3>'
+        f'<p class="muted">Score: <strong>{compliance_score}/100</strong> — höher bedeutet weniger Risiko.</p>'
+        f'<ul style="list-style:none; padding:0; margin:0.5rem 0;">{risk_list}</ul>'
+        f'</div>'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("users")} Sensible Daten (PII)</h3>'
+        f'{pii_html}'
+        f'</div>'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("file-spreadsheet")} Governance-relevante Funde</h3>'
+        f'{_audience_accordion(findings, "governance")}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def _schema_hint(profile: ColumnProfile) -> str:
+    """Kurzer Hinweis, wie die Spalte in einer DB aussehen könnte."""
+    if profile.total == 0:
+        return "—"
+    if profile.unique_count >= max(5, int(profile.total * 0.95)) and profile.null_ratio == 0:
+        return "Kandidat für PRIMARY KEY"
+    if profile.unique_count <= 10 and profile.total >= 20:
+        return "Kandidat für ENUM / Dropdown"
+    if profile.null_ratio > 0.3:
+        return "Hoher Null-Anteil — optional in DB"
+    return "—"
+
+
+def _html_column_profile_table(profiles: list[ColumnProfile]) -> str:
+    """Rendert die Column-Profile als Tabelle (Phase 2 A.4)."""
+    if not profiles:
+        return (
+            '<div class="panel-placeholder">'
+            'Keine Column-Profile verfügbar (Sheet zu klein oder Sampling aktiv).'
+            '</div>'
+        )
+    rows = []
+    for p in profiles:
+        types = ", ".join(f"{k} {v}" for k, v in sorted(p.type_mix.items(), key=lambda kv: -kv[1]) if k != "null")
+        rows.append(
+            f'<tr>'
+            f'<td>{_esc(p.sheet)}</td>'
+            f'<td><code>{_esc(p.column_letter)}</code></td>'
+            f'<td>{_esc(p.header or "—")}</td>'
+            f'<td class="num">{p.total}</td>'
+            f'<td class="num">{p.null_ratio:.0%}</td>'
+            f'<td class="num">{p.unique_count}</td>'
+            f'<td>{_esc(p.dominant_type or "—")}</td>'
+            f'<td><small class="muted">{_esc(types)}</small></td>'
+            f'<td>{_esc(_schema_hint(p))}</td>'
+            f'</tr>'
+        )
+    return (
+        '<div style="overflow-x:auto;">'
+        '<table class="sheet-table">'
+        '<thead><tr>'
+        '<th>Blatt</th><th>Spalte</th><th>Header</th>'
+        '<th class="num">Zeilen</th><th class="num">Null-%</th><th class="num">Unique</th>'
+        '<th>Typ</th><th>Typ-Mix</th><th>Schema-Hint</th>'
+        '</tr></thead><tbody>'
+        + "".join(rows)
+        + '</tbody></table></div>'
+    )
+
+
+def _html_tab_migration(findings: list, report: WorkbookReport, avg_db: int) -> str:
+    avg_db_color = _db_readiness_color(avg_db)
+    avg_db_label = _db_readiness_label(avg_db)
+    profile_html = _html_column_profile_table(report.column_profiles)
+    return (
+        f'<div class="audience-panel" data-audience="migration">'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("database")} DB-Readiness (Durchschnitt)</h3>'
+        f'<p><strong style="color:{avg_db_color}; font-size:1.8rem;">{avg_db}</strong> / 100 &middot; '
+        f'<span class="muted">{_esc(avg_db_label)}</span></p>'
+        f'</div>'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("bar-chart-3")} Column-Profile</h3>'
+        f'{profile_html}'
+        f'</div>'
+        f'<div class="audience-panel-section">'
+        f'<h3>{_lucide("file-spreadsheet")} Migration-relevante Funde</h3>'
+        f'{_audience_accordion(findings, "migration")}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+def _html_audience_tabs(findings: list, compliance_score: int,
+                        compliance_risks: list[tuple[str, str, str]],
+                        report: WorkbookReport, avg_db: int) -> str:
+    """Ersetzt die alten Kategorie-Tabs durch drei Audience-Tabs."""
+    # Tab-Buttons
+    tab_btns = []
+    for i, aud in enumerate(AUDIENCE_ORDER):
+        label, hint = AUDIENCE_LABELS[aud]
+        count = sum(1 for f in findings if aud in _audiences_for(f))
+        selected = 'true' if i == 0 else 'false'
+        tab_btns.append(
+            f'<button class="audience-tab" role="tab" '
+            f'aria-selected="{selected}" data-audience-tab="{aud}" '
+            f'onclick="switchAudience(this)">'
+            f'<span>{_esc(label)} ({count})</span>'
+            f'<span class="audience-tab-hint">{_esc(hint)}</span>'
+            f'</button>'
+        )
+
+    panels = [
+        _html_tab_was_tun(findings),
+        _html_tab_governance(findings, compliance_score, compliance_risks),
+        _html_tab_migration(findings, report, avg_db),
+    ]
+    return (
+        '<div class="card">'
+        f'<h2>{_lucide("target")} Detaillierte Ergebnisse</h2>'
+        '<div class="audience-tabs" role="tablist">'
+        + "".join(tab_btns) +
+        '</div>'
+        + "".join(panels) +
+        '</div>'
+    )
 
 
 def generate_llm_section_html(analysis) -> str:
@@ -1594,10 +2000,10 @@ def generate_llm_section_html(analysis) -> str:
     # Summary
     if analysis.summary:
         parts.append(f"""
-<div style="padding:1rem 1.25rem;background:linear-gradient(135deg,#eff6ff 0%,#f0fdf4 100%);
-     border:1px solid #bfdbfe;border-radius:10px;margin-bottom:1.5rem;">
+<div style="padding:1rem 1.25rem;background:var(--bg-info-soft);
+     border:1px solid var(--border);border-radius:10px;margin-bottom:1.5rem;">
   <div style="font-size:1.1rem;font-weight:600;margin-bottom:0.5rem;">💬 KI-Zusammenfassung</div>
-  <div style="font-size:0.95rem;color:#334155;line-height:1.6;">{_esc(analysis.summary)}</div>
+  <div style="font-size:0.95rem;color:var(--text);line-height:1.6;">{_esc(analysis.summary)}</div>
 </div>""")
 
     # Optimization table
@@ -1653,10 +2059,10 @@ def generate_llm_section_html(analysis) -> str:
     # Architecture advice
     if analysis.architecture_advice:
         parts.append(f"""
-<div style="padding:1rem 1.25rem;background:linear-gradient(135deg,#fef9c3 0%,#fef3c7 100%);
-     border:1px solid #fde68a;border-radius:10px;margin-bottom:1.5rem;">
+<div style="padding:1rem 1.25rem;background:var(--bg-warning-soft);
+     border:1px solid var(--border);border-radius:10px;margin-bottom:1.5rem;">
   <div style="font-size:1rem;font-weight:600;margin-bottom:0.5rem;">🏗️ Architektur-Empfehlung</div>
-  <div style="font-size:0.9rem;color:#334155;line-height:1.6;">{_esc(analysis.architecture_advice)}</div>
+  <div style="font-size:0.9rem;color:var(--text);line-height:1.6;">{_esc(analysis.architecture_advice)}</div>
 </div>""")
 
     # Per-Sheet Assessment
@@ -1788,6 +2194,84 @@ function switchHeroTab(btn, panelId) {
   btn.classList.add('active');
   btn.closest('.card').querySelectorAll('.hero-tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById(panelId).classList.add('active');
+}
+
+// ── Audience-Tabs (Phase 2 C.4) ────────────────────────────
+function switchAudience(btn) {
+  var card = btn.closest('.card');
+  if (!card) return;
+  var target = btn.getAttribute('data-audience-tab');
+  card.querySelectorAll('.audience-tab').forEach(function(b) {
+    b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+  });
+  card.querySelectorAll('.audience-panel').forEach(function(p) {
+    p.setAttribute('data-active', p.getAttribute('data-audience') === target ? 'true' : 'false');
+  });
+}
+
+// ── Severity-Filter-Pills (Phase 2 C.7) ───────────────────
+function filterBySeverity(btn) {
+  var panel = btn.closest('.audience-panel');
+  if (!panel) return;
+  var sev = btn.getAttribute('data-severity');
+  panel.querySelectorAll('.severity-pill').forEach(function(p) {
+    p.setAttribute('aria-pressed', p === btn ? 'true' : 'false');
+  });
+  panel.querySelectorAll('.finding-card').forEach(function(card) {
+    var cardSev = card.getAttribute('data-severity');
+    var show = (sev === 'all') || (cardSev === sev);
+    // error + critical zusammenfassen, wenn eine kritische Pille gewählt wird:
+    if (sev === 'error' && cardSev === 'critical') show = true;
+    card.setAttribute('data-hidden', show ? 'false' : 'true');
+  });
+}
+
+// ── Clipboard-Copy für Cell-Refs (Phase 2 C.6) ────────────
+function copyCellRef(el) {
+  var ref = el.getAttribute('data-cell') || el.textContent;
+  var done = function() { showToast('Kopiert: ' + ref); };
+  var fail = function() { showToast('Kopieren fehlgeschlagen'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ref).then(done).catch(fail);
+  } else {
+    // Fallback via temp textarea
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = ref;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    } catch(e) { fail(); }
+  }
+}
+
+function showToast(msg) {
+  var toast = document.getElementById('report-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.id = 'report-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.classList.add('is-visible');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(function() {
+    toast.classList.remove('is-visible');
+  }, 1500);
+}
+
+function scrollToFinding(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.open = true;
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  el.style.transition = 'box-shadow 0.4s';
+  var prev = el.style.boxShadow;
+  el.style.boxShadow = '0 0 0 3px var(--accent)';
+  setTimeout(function() { el.style.boxShadow = prev; }, 1200);
 }
 
 // ── LLM Integration ──
