@@ -338,9 +338,10 @@ class IdentifierConsistencyRule(BaseRule):
             # Prüfe Ziffernbreite (z.B. 001 vs 2 vs 0003)
             digit_lengths = set(len(num_str) for _, _, num_str in entries)
             if len(digit_lengths) > 1:
-                examples = []
-                for _, val, _ in entries[:5]:
-                    examples.append(val)
+                # Wichtig: KEIN `_` als Iterationsvariable — `_` ist oben als
+                # i18n-Funktion importiert und würde hier überschrieben, sodass
+                # nachfolgende _("STR-005...")-Calls mit TypeError crashen.
+                examples = [val for _row_idx, val, _num in entries[:5]]
                 issues.append((
                     Severity.ERROR,
                     _("STR-005.msg.inconsistent", col=col_letter, prefix=prefix, sep=sep),
@@ -500,7 +501,9 @@ class TextBasedIdRule(BaseRule):
                 # Prüfe ob Werte Freitext sind (lang, mit Leerzeichen)
                 long_text_count = 0
                 space_count = 0
-                for _, val in values:
+                # KEIN `_` als Iterationsvariable — würde die i18n-Funktion
+                # überschreiben. Siehe IdentifierConsistencyRule._check_consistency.
+                for _row_idx, val in values:
                     if len(val) > 30:
                         long_text_count += 1
                     if val.count(" ") >= 2:
