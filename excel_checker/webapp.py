@@ -40,28 +40,57 @@ _report_data: dict[str, WorkbookReport] = {}
 _sessions: dict[str, queue_mod.Queue] = {}
 
 
-def _recover_from_backup():
-    """Restoration shim — the original source for UPLOAD_PAGE and _start_analysis
-    was lost on 2026-04-21 when webapp.py was accidentally truncated. The intact
-    compiled bytecode was preserved in _webapp_bytecode.pyc next to this file.
-    UPLOAD_PAGE is read from the _upload_page.html sidecar; _start_analysis is
-    reconstituted from the backup bytecode's code object (too complex a nested
-    closure to decompile cleanly by hand)."""
-    import marshal, types
-    from pathlib import Path
-    pkg_dir = Path(__file__).parent
-    with open(pkg_dir / '_upload_page.html', 'r', encoding='utf-8') as f:
-        upload = f.read()
-    with open(pkg_dir / '_webapp_bytecode.pyc', 'rb') as f:
-        f.read(16)  # pyc header
-        module_code = marshal.load(f)
-    start_code = next(c for c in module_code.co_consts
-                      if isinstance(c, types.CodeType) and c.co_name == '_start_analysis')
-    func = types.FunctionType(start_code, globals(), name='_start_analysis')
-    return upload, func
+from pathlib import Path as _Path
+with open(_Path(__file__).with_name('_upload_page.html'), 'r', encoding='utf-8') as _f:
+    UPLOAD_PAGE = _f.read()
 
 
-UPLOAD_PAGE, _start_analysis = _recover_from_backup()
+def _start_analysis(session_id: str, tmp_path: str, original_name: str) -> None:
+    """Startet die Excel-Analyse in einem Daemon-Thread und schickt Progress-
+    und Report-Events auf die SSE-Queue der Session."""
+    q = _sessions[session_id]
+
+    def worker() -> None:
+        report = None
+
+        def progress_callback(evt):
+            evt = dict(evt)
+            evt['status'] = evt.get('status', 'running')
+            q.put(('progress', evt))
+
+        try:
+            for event_or_report in analyze_with_progress(
+                tmp_path,
+                rule_timeout_sec=30,
+                progress_callback=progress_callback,
+            ):
+                if isinstance(event_or_report, WorkbookReport):
+                    report = event_or_report
+                else:
+                    q.put(('progress', event_or_report))
+
+            if report is not None:
+                report.file_path = original_name
+                html = generate_html(report)
+                report_id = uuid.uuid4().hex
+                with _pending_lock:
+                    _reports[report_id] = html
+                    _report_data[report_id] = report
+                q.put(('report', {'report_id': report_id}))
+        except Exception as e:
+            tb = traceback.format_exc()
+            q.put(('error', f"{e}\n\nTraceback:\n{tb}"))
+
+        try:
+            os.unlink(tmp_path)
+            os.rmdir(os.path.dirname(tmp_path))
+        except OSError:
+            pass
+
+        q.put(('done', None))
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
 
 
 ERROR_PAGE = """<!DOCTYPE html>

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+!excel_checker/_webapp_bytecode.pyc
 *.pyo
 *.egg-info/
 .venv/
