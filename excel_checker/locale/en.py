@@ -1,4 +1,4 @@
-"""English translations for ExcelChecker."""
+"""English translations for Excel-Reifecheck."""
 
 STRINGS: dict[str, str] = {
 

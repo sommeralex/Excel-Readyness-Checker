@@ -1,4 +1,4 @@
-"""Deutsche Übersetzungen für den ExcelChecker (Standardsprache)."""
+"""Deutsche Übersetzungen für den Excel-Reifecheck (Standardsprache)."""
 
 # Alle nutzer-sichtbaren Strings, organisiert nach Modul.
 # Schlüssel verwenden Punkt-Notation: modul.kontext oder REGEL-ID.kontext

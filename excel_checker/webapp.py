@@ -485,7 +485,7 @@ def download_report(report_id):
     return "Report nicht gefunden", 404
   response = make_response(html)
   response.headers['Content-Type'] = 'text/html; charset=utf-8'
-  response.headers['Content-Disposition'] = f'attachment; filename=ExcelChecker_Report_{report_id}.html'
+  response.headers['Content-Disposition'] = f'attachment; filename=Excel-Reifecheck_Report_{report_id}.html'
   return response
 
 

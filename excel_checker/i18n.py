@@ -1,4 +1,4 @@
-"""Internationalisierung (i18n) für den ExcelChecker.
+"""Internationalisierung (i18n) für den Excel-Reifecheck.
 
 Stellt eine zentrale _()-Funktion bereit, die Übersetzungsschlüssel
 in die aktuelle Sprache auflöst. Standardsprache ist Deutsch.

@@ -1,4 +1,4 @@
-"""ExcelChecker – Automatisierter Excel-Linter für saubere Tabellenkalkulationen."""
+"""Excel-Reifecheck – Automatisierter Excel-Linter für saubere Tabellenkalkulationen."""
 
 import os as _os
 from datetime import datetime as _dt
