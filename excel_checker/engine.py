@@ -579,13 +579,14 @@ def analyze_with_progress(
 
         findings = []
         error = None
+        error_tb = None
         # Sample-Mode nur an sampling-fähige Regeln übergeben. Andere Regeln
         # ignorieren die Stichproben-Schwelle und scannen ihre üblichen
         # Teil-Bereiche (z. B. erste 5000 Zeilen).
         effective_sample = sample_mode if rule_cls.supports_sampling else None
 
         def run_rule():
-            nonlocal findings, error
+            nonlocal findings, error, error_tb
             try:
                 # argcount enthält self → 4 bedeutet: check(self, wb, file_path, progress_callback)
                 # 5 bedeutet: check(self, wb, file_path, progress_callback, sample_mode)
@@ -599,25 +600,30 @@ def analyze_with_progress(
                     findings = rule.check(wb, file_path)
             except Exception as e:
                 error = e
+                # Traceback JETZT einfangen — format_exc() außerhalb des except-
+                # Blocks liefert "NoneType: None\n".
+                error_tb = traceback.format_exc()
         thread = threading.Thread(target=run_rule)
         thread.start()
         thread.join(timeout=rule_timeout_sec)
         if thread.is_alive():
-            # Timeout: Thread läuft noch
-            yield progress(
+            # Timeout: Thread läuft noch. Error-Event darf den Step-Counter
+            # NICHT weiter erhöhen — sonst erreicht pct 100 % bevor die letzten
+            # Regeln durch sind und die UI zeigt fälschlich "fertig".
+            error_evt = sub_progress(
                 _( "engine.rule_error", name=rule.rule_name),
                 _( "engine.rule_error_detail", error=f"Timeout nach {rule_timeout_sec}s"),
-                status="error"
             )
-            # Thread läuft weiter, aber wir machen weiter mit der nächsten Regel
+            error_evt["status"] = "error"
+            yield error_evt
             continue
         if error:
-            tb = traceback.format_exc()
-            yield progress(
+            error_evt = sub_progress(
                 _( "engine.rule_error", name=rule.rule_name),
-                _( "engine.rule_error_detail", error=f"{error}\n{tb}"),
-                status="error"
+                _( "engine.rule_error_detail", error=f"{error}\n{error_tb or ''}"),
             )
+            error_evt["status"] = "error"
+            yield error_evt
             continue
         report.findings.extend(findings)
 
