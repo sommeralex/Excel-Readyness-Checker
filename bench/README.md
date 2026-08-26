@@ -30,6 +30,17 @@ cp bench/bench.html bench/wb_*.xlsx srv/
 `run_bench.py` sucht Chromium unter `/opt/pw-browsers/chromium-*/chrome-linux/chrome`;
 Pfad ggf. anpassen.
 
+Zwei Fallstricke beim Nachmessen:
+
+- `ru_maxrss` ist **auf Linux in KB, auf macOS in Bytes**. `bench.py` rechnet
+  das seit dem Etappe-1-Lauf plattformabhängig um; wer die Zahlen anders
+  erhebt, liegt sonst um Faktor 1024 daneben.
+- Die von `gen.py` erzeugten Dateien enthalten **kein `<dimension>`-Element**
+  (openpyxl schreibt im write-only-Modus keines). Im read-only-Modus liefert
+  `ws.max_row` dafür `None`; der Analysekern rechnet die Maße dann per
+  zusätzlichem Durchlauf nach. Reale Excel-Dateien bringen das Element mit
+  und sparen sich diesen Lauf — bei wb_L rund 35 s.
+
 ## Ergebnisse (26.08.2026, Codestand 3d0b075)
 
 Testdateien: gemischte Typen (String-IDs, Ganzzahlen, Fließkomma, Enum-Text,
@@ -66,9 +77,9 @@ Datum), ein Blatt.
 1. **`read_only` ist der entscheidende Hebel.** Ohne ihn wächst der Speicher
    mit etwa dem **70-fachen der Dateigröße**; mit ihm bleibt er ungefähr bei
    der **einfachen Dateigröße**. Bei wb_L: 3134 MB gegen 49 MB.
-2. **`read_only` ist heute nicht aktiv.** `_select_tier` setzt in allen drei
-   Tiers `read_only: False` (`engine.py:242`); der Kommentar in
-   `engine.py:359` behauptet das Gegenteil und ist veraltet.
+2. **`read_only` ist seit Etappe 1 aktiv** (ab Tier 2). Gegenmessung mit
+   demselben Harness auf wb_L: `analyze` braucht **58 MB** statt **3501 MB**
+   Peak-RSS. Details in `docs/deployment/PLAN.md`, Abschnitt 7.
 3. **openpyxl läuft unverändert unter Pyodide** — bestätigt, nicht vermutet.
 4. **Der Pyodide-Aufschlag ist klein**: Faktor 1,2 bis 1,6 gegenüber CPython,
    nicht 3 bis 10.

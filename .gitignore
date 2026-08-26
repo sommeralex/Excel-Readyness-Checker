@@ -9,6 +9,9 @@ venv/
 .DS_Store
 *.log
 
+# Benchmark-Testdateien (gross, per bench/gen.py reproduzierbar)
+bench/wb_*.xlsx
+
 # Generierte Test-Reports
 test_*_report.html
 test_effizienz_report.html

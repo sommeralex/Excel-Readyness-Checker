@@ -11,7 +11,36 @@ from openpyxl.utils import get_column_letter
 
 from excel_checker.i18n import _
 from excel_checker.models import Category, Finding, Severity
+from excel_checker.rules._sampling import iter_window_rows
 from excel_checker.rules.base import BaseRule
+
+
+def _scan_columns(ws, max_row: int, max_col: int, text_only: bool = False):
+    """Liest Kopfzeile und Spaltenwerte in einem einzigen Vorwaertslauf.
+
+    Ersetzt das frueher spaltenweise ``ws.cell(row, col)``-Muster, das im
+    ``read_only``-Modus nicht funktioniert.
+
+    ``text_only=False`` -> je Spalte die Liste der nicht-leeren Werte.
+    ``text_only=True``  -> je Spalte nur String-Werte als ``(row_idx, wert)``.
+    """
+    headers: List[Optional[object]] = [None] * max_col
+    values_per_col: List[list] = [[] for _c in range(max_col)]
+    for row_idx, row in iter_window_rows(ws, max_row, max_col):
+        if row_idx == 1:
+            for col_pos, cell in enumerate(row):
+                headers[col_pos] = cell.value
+            continue
+        for col_pos, cell in enumerate(row):
+            value = cell.value
+            if value is None:
+                continue
+            if text_only:
+                if isinstance(value, str):
+                    values_per_col[col_pos].append((row_idx, value.strip()))
+            else:
+                values_per_col[col_pos].append(value)
+    return headers, values_per_col
 
 
 class MergedCellsRule(BaseRule):
@@ -19,6 +48,7 @@ class MergedCellsRule(BaseRule):
 
     rule_id = "STR-001"
     rule_name = _("STR-001.name")
+    needs_styles = True  # ws.merged_cells ist im read_only-Modus nicht verfügbar
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
@@ -72,22 +102,27 @@ class DataTypeHomogeneityRule(BaseRule):
                 continue
             max_row = min(ws.max_row, row_cap)
             max_col = min(ws.max_column or 1, col_cap)
-            for col_idx in range(1, max_col + 1):
-                type_counts: Counter = Counter()
-                non_empty = 0
-                for row_idx in range(2, max_row + 1):  # Skip header
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    if cell.value is None:
+            # Ein Vorwaertslauf ab Zeile 2, Spaltenstatistik nebenher.
+            counts_per_col: List[Counter] = [Counter() for _c in range(max_col)]
+            non_empty_per_col = [0] * max_col
+            for _row_idx, row in iter_window_rows(ws, max_row, max_col, min_row=2):
+                for col_pos, cell in enumerate(row):
+                    value = cell.value
+                    if value is None:
                         continue
-                    non_empty += 1
-                    if isinstance(cell.value, (int, float)):
-                        type_counts["Zahl"] += 1
-                    elif isinstance(cell.value, str):
-                        type_counts["Text"] += 1
-                    elif isinstance(cell.value, bool):
-                        type_counts["Boolean"] += 1
+                    non_empty_per_col[col_pos] += 1
+                    if isinstance(value, (int, float)):
+                        counts_per_col[col_pos]["Zahl"] += 1
+                    elif isinstance(value, str):
+                        counts_per_col[col_pos]["Text"] += 1
+                    elif isinstance(value, bool):
+                        counts_per_col[col_pos]["Boolean"] += 1
                     else:
-                        type_counts["Datum/Andere"] += 1
+                        counts_per_col[col_pos]["Datum/Andere"] += 1
+
+            for col_idx in range(1, max_col + 1):
+                type_counts = counts_per_col[col_idx - 1]
+                non_empty = non_empty_per_col[col_idx - 1]
 
                 if non_empty < 5:
                     continue
@@ -130,13 +165,18 @@ class HeaderDetectionRule(BaseRule):
             if ws.max_row is None or ws.max_row < 2:
                 continue
 
-            # Prüfe die ersten 5 Zeilen
+            # Die ersten 5 Zeilen einmal lesen — beide Prüfungen unten
+            # arbeiten auf demselben Fenster.
+            max_col = min(ws.max_column or 1, 99)
+            head_rows = {
+                row_idx: [c.value for c in row]
+                for row_idx, row in iter_window_rows(
+                    ws, min(5, ws.max_row), max_col
+                )
+            }
+
             header_candidates = []
-            for row_idx in range(1, min(6, ws.max_row + 1)):
-                row_values = []
-                for col_idx in range(1, min((ws.max_column or 1) + 1, 100)):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    row_values.append(cell.value)
+            for row_idx, row_values in head_rows.items():
                 non_empty = sum(1 for v in row_values if v is not None)
                 all_text = all(isinstance(v, str) for v in row_values if v is not None)
                 if non_empty > 0 and all_text:
@@ -168,11 +208,11 @@ class HeaderDetectionRule(BaseRule):
             # Prüfe auf doppelte Header-Namen
             if header_candidates:
                 hr = header_candidates[0]
-                names = []
-                for col_idx in range(1, min((ws.max_column or 1) + 1, 100)):
-                    val = ws.cell(row=hr, column=col_idx).value
-                    if val is not None:
-                        names.append(str(val).strip())
+                names = [
+                    str(val).strip()
+                    for val in head_rows.get(hr, [])
+                    if val is not None
+                ]
                 dupes = [n for n, cnt in Counter(names).items() if cnt > 1]
                 if dupes:
                     findings.append(Finding(
@@ -207,11 +247,8 @@ class EmptyRowColSeparatorRule(BaseRule):
             empty_rows = []
             data_started = False
             data_ended = False
-            for row_idx in range(1, max_row + 1):
-                is_empty = all(
-                    ws.cell(row=row_idx, column=c).value is None
-                    for c in range(1, max_col + 1)
-                )
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                is_empty = all(cell.value is None for cell in row)
                 if not is_empty:
                     if data_ended:
                         # Daten nach einer Lücke = fragmentiert
@@ -255,25 +292,24 @@ class IdentifierConsistencyRule(BaseRule):
             max_row = min(ws.max_row, 3000)
             max_col = min(ws.max_column or 1, 100)
 
+            # Textwerte aller Spalten in einem Lauf sammeln.
+            values_per_col: List[list] = [[] for _c in range(max_col)]
+            for row_idx, row in iter_window_rows(ws, max_row, max_col, min_row=2):
+                for col_pos, cell in enumerate(row):
+                    if isinstance(cell.value, str):
+                        values_per_col[col_pos].append((row_idx, cell.value.strip()))
+                # Fortschritt melden (alle 500 Zeilen)
+                if progress_callback and row_idx % 500 == 0:
+                    progress_callback({
+                        "rule": self.rule_id,
+                        "sheet": ws.title,
+                        "row": row_idx,
+                        "status": "scanning"
+                    })
+
             for col_idx in range(1, max_col + 1):
                 col_letter = get_column_letter(col_idx)
-                header = ws.cell(row=1, column=col_idx).value
-
-                # Sammle alle Werte der Spalte
-                values = []
-                for row_idx in range(2, max_row + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    if cell.value is not None and isinstance(cell.value, str):
-                        values.append((row_idx, cell.value.strip()))
-                    # Fortschritt melden (alle 500 Zeilen)
-                    if progress_callback and row_idx % 500 == 0:
-                        progress_callback({
-                            "rule": self.rule_id,
-                            "sheet": ws.title,
-                            "col": col_letter,
-                            "row": row_idx,
-                            "status": "scanning"
-                        })
+                values = values_per_col[col_idx - 1]
 
                 if len(values) < 3:
                     continue
@@ -422,17 +458,15 @@ class MissingUniqueKeyRule(BaseRule):
             if data_rows < 10 or max_col < 2:
                 continue
 
+            headers, values_per_col = _scan_columns(ws, max_row, max_col)
+
             has_unique_col = False
             for col_idx in range(1, max_col + 1):
-                header = ws.cell(row=1, column=col_idx).value
+                header = headers[col_idx - 1]
                 if isinstance(header, str) and header.strip().lower() in self.NON_ID_HEADERS:
                     continue
 
-                values = []
-                for row_idx in range(2, max_row + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    if cell.value is not None:
-                        values.append(cell.value)
+                values = values_per_col[col_idx - 1]
 
                 if len(values) < data_rows * 0.8:
                     continue  # Zu viele Lücken
@@ -479,8 +513,10 @@ class TextBasedIdRule(BaseRule):
             max_row = min(ws.max_row, 3000)
             max_col = min(ws.max_column or 1, 100)
 
+            headers, text_values = _scan_columns(ws, max_row, max_col, text_only=True)
+
             for col_idx in range(1, max_col + 1):
-                header = ws.cell(row=1, column=col_idx).value
+                header = headers[col_idx - 1]
                 if not isinstance(header, str):
                     continue
 
@@ -489,11 +525,7 @@ class TextBasedIdRule(BaseRule):
                 if not is_id_col:
                     continue
 
-                values = []
-                for row_idx in range(2, max_row + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
-                    if cell.value is not None and isinstance(cell.value, str):
-                        values.append((row_idx, cell.value.strip()))
+                values = text_values[col_idx - 1]
 
                 if len(values) < 5:
                     continue

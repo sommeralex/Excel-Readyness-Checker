@@ -162,6 +162,32 @@ def _count_cells_sampled(ws, real_rows: int, real_cols: int) -> tuple[int, int]:
 ProgressEvent = dict  # {"step": str, "detail": str, "pct": int, "status": "running"|"done"|"error"}
 
 
+def _sheets_without_dimensions(wb) -> list:
+    """Blätter, deren Größe openpyxl im read-only-Modus nicht kennt."""
+    return [ws for ws in wb.worksheets
+            if ws.max_row is None or ws.max_column is None]
+
+
+def _ensure_dimensions(ws) -> None:
+    """Ermittelt fehlende Blattmaße im read-only-Modus nach.
+
+    Nicht jede XLSX-Datei enthält ein ``<dimension>``-Element; Streaming-
+    Writer lassen es weg (openpyxl selbst im write-only-Modus ebenso). Ohne
+    ``read_only`` rechnet openpyxl die Maße beim Laden aus, im read-only-
+    Modus bleiben ``max_row``/``max_column`` dagegen ``None``. Jede Regel
+    prüft aber ``if ws.max_row is None: continue`` — das Blatt würde also
+    stillschweigend übersprungen und der Report wäre still falsch.
+
+    Kostet einen zusätzlichen Streaming-Durchlauf, aber nur für Blätter
+    ohne Größenangabe und ohne nennenswerten Speicherbedarf.
+    """
+    try:
+        ws.calculate_dimension(force=True)
+    except (ValueError, AttributeError, TypeError):
+        # Lieber ohne Maße weiterlaufen als die ganze Analyse abbrechen.
+        pass
+
+
 def _compute_db_readiness(stats: SheetStats, findings: list) -> int:
     """Berechnet wie gut ein Sheet in eine Datenbank überführbar wäre (0-100)."""
     score = 100
@@ -229,29 +255,37 @@ def _select_tier(file_size_mb: float) -> tuple[int, Optional[SampleMode], dict]:
 
     tier 1: alle Regeln, vollständiger Scan, keine Sampling-Einschränkung.
     tier 2: Regeln ohne ``needs_styles`` laufen, sampling-fähige Regeln
-            bekommen ``SampleMode`` übergeben. Workbook wird NICHT im
-            read-only-Modus geladen, da bestehende Regeln ``ws.cell(r,c)``
-            nutzen – das ist in openpyxl read-only ineffizient.
+            bekommen ``SampleMode`` übergeben. Das Workbook wird im
+            read-only-Modus geladen: openpyxl streamt die Blatt-XML dann
+            zeilenweise, statt für jede Zelle ein Objekt zu behalten. Das
+            senkt den Speicherbedarf von etwa dem 70-fachen der Dateigröße
+            auf etwa die einfache Dateigröße.
     tier 3: wie Tier 2, aber Regeln die weder sampling-fähig noch
             zellen-unabhängig sind, werden übersprungen. Aggressiveres
             Sampling (kleinere Stichprobe pro Blatt).
 
-    Der read-only-Modus bleibt eine spätere Optimierung (würde erfordern,
-    dass Regeln ``iter_rows`` statt ``ws.cell`` nutzen).
+    Voraussetzung für den read-only-Modus: Regeln greifen ausschließlich
+    über ``iter_rows`` zu (siehe ``rules/_sampling.iter_window_rows``) und
+    nicht über ``ws.cell(r, c)`` — wahlfreier Zugriff ist beim Streamen
+    nicht möglich. Blatt-Eigenschaften wie ``merged_cells``, ``protection``
+    oder ``conditional_formatting`` fehlen dort ebenfalls; Regeln, die sie
+    brauchen, sind mit ``needs_styles`` markiert und laufen nur in Tier 1.
     """
-    base_load = {"read_only": False, "data_only": False}
     if file_size_mb <= _TIER1_MAX_MB:
-        return 1, None, base_load
+        # Tier 1 lädt vollständig: hier laufen auch die Regeln, die Styles
+        # und Blatt-Eigenschaften brauchen. Bei <= 15 MB ist das bezahlbar.
+        return 1, None, {"read_only": False, "data_only": False}
+    read_only_load = {"read_only": True, "data_only": False}
     if file_size_mb <= _TIER2_MAX_MB:
         return (
             2,
             SampleMode(max_cells_per_sheet=10_000, max_rows_per_sheet=20_000),
-            base_load,
+            read_only_load,
         )
     return (
         3,
         SampleMode(max_cells_per_sheet=3_000, max_rows_per_sheet=8_000),
-        base_load,
+        read_only_load,
     )
 
 
@@ -356,9 +390,21 @@ def analyze_with_progress(
     }
 
     # === Schritt 1: Datei laden ===
-    # load_kwargs ist vom Tier bestimmt (read_only=True ab Tier 2).
+    # load_kwargs ist vom Tier bestimmt: read_only=True ab Tier 2.
     wb = openpyxl.load_workbook(file_path, **load_kwargs)
     current_step = 1
+
+    # Im read-only-Modus fehlen Blattmaße, wenn die Datei kein
+    # ``<dimension>``-Element mitbringt — siehe _ensure_dimensions.
+    if load_kwargs.get("read_only"):
+        unsized = _sheets_without_dimensions(wb)
+        if unsized:
+            yield sub_progress(
+                _("engine.sizing"),
+                _("engine.sizing_detail", count=len(unsized)),
+            )
+            for ws in unsized:
+                _ensure_dimensions(ws)
 
     report = WorkbookReport(
         file_path=file_path,

@@ -53,6 +53,8 @@ STRINGS: dict[str, str] = {
     "engine.file_not_found": "Datei nicht gefunden: {path}",
     "engine.loading": "📂 Datei wird geladen{mode}",
     "engine.loading_detail": "{size} wird eingelesen…",
+    "engine.sizing": "📐 Blattgrenzen werden ermittelt",
+    "engine.sizing_detail": "Die Datei enthält keine Größenangabe – {count} Blatt/Blätter werden einmal durchlaufen…",
     "engine.stats_queue": "📊 Sheet-Statistiken sammeln",
     "engine.analyzing": "📊 Sheets werden analysiert",
     "engine.analyzing_detail": "{count} Sheets: {names}",

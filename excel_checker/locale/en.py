@@ -50,6 +50,8 @@ STRINGS: dict[str, str] = {
     "engine.file_not_found": "File not found: {path}",
     "engine.loading": "📂 Loading file{mode}",
     "engine.loading_detail": "Reading {size}…",
+    "engine.sizing": "📐 Determining sheet bounds",
+    "engine.sizing_detail": "File carries no size record – scanning {count} sheet(s) once…",
     "engine.stats_queue": "📊 Collecting sheet statistics",
     "engine.analyzing": "📊 Analyzing sheets",
     "engine.analyzing_detail": "{count} sheets: {names}",

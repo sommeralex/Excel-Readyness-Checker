@@ -13,6 +13,8 @@ elif mode == "analyze":
     rep = analyze(path)
     n = f"score={rep.health_score} findings={len(rep.findings)}"
 dt = time.perf_counter() - t0
-rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+# ru_maxrss ist auf Linux in KB, auf macOS/BSD in Bytes.
+_rss_div = 1048576 if sys.platform == "darwin" else 1024
+rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / _rss_div
 mb = os.path.getsize(path)/1048576
 print(f"{mode:9s} {os.path.basename(path):12s} {mb:6.1f} MB  {dt:7.1f} s  {rss:8.0f} MB peak   {n}")

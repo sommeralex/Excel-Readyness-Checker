@@ -11,6 +11,7 @@ from openpyxl.utils import get_column_letter
 
 from excel_checker.i18n import _
 from excel_checker.models import Category, Finding, Severity
+from excel_checker.rules._sampling import iter_window_rows
 from excel_checker.rules.base import BaseRule
 
 # Volatile Funktionen (deutsch + englisch)
@@ -76,11 +77,11 @@ class AbsoluteVsRelativeRule(BaseRule):
             mixed_count = 0
             total_formulas = 0
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     formula = cell.value
                     total_formulas += 1
 
@@ -135,11 +136,11 @@ class VolatileFunctionsRule(BaseRule):
 
             volatile_cells = defaultdict(list)
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     functions_used = FUNCTION_PATTERN.findall(cell.value)
                     for func in functions_used:
                         if func.upper() in VOLATILE_FUNCTIONS:
@@ -184,11 +185,11 @@ class VlookupChainsRule(BaseRule):
             lookup_count = 0
             lookup_functions_used = defaultdict(int)
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     functions_used = FUNCTION_PATTERN.findall(cell.value)
                     for func in functions_used:
                         if func.upper() in LOOKUP_FUNCTIONS:
@@ -231,11 +232,11 @@ class CircularReferenceHintRule(BaseRule):
             max_col = min(ws.max_column or 1, 200)
 
             suspect_cells = []
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     col_letter = get_column_letter(col_idx)
                     own_ref = f"{col_letter}{row_idx}"
                     # Einfache Prüfung: Referenziert die Formel ihre eigene Zelle?
@@ -277,11 +278,11 @@ class CrossSheetReferenceRule(BaseRule):
             sheet_refs = defaultdict(int)
             external_refs = defaultdict(int)
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     formula = cell.value
 
                     # Externe Dateien

@@ -1,6 +1,6 @@
 # Ausliefern statt Hosten — Reifecheck als Web-App und als Download
 
-Status: Entwurf v2 (Messungen ergänzt) · Basis: Codestand `bb1121f` · Entscheidungsvorlage
+Status: v3 (Etappe 1 umgesetzt) · Basis: Codestand `4f37c3d` · Entscheidungsvorlage
 
 ---
 
@@ -41,14 +41,13 @@ Peak-RSS normal gegen **49 MB** mit `read_only`. Im Browser dasselbe Bild:
 
 ### 1.3 Drei Befunde, die den Plan bestimmen
 
-1. **`read_only` ist heute nicht aktiv.** `_select_tier` setzt in allen drei
-   Tiers `read_only: False` (`engine.py:242`, der Docstring sagt es
-   ausdrücklich); der Kommentar in `engine.py:359` behauptet das Gegenteil und
-   ist veraltet. **Das ist die höchstwirksame Einzeländerung im ganzen
-   Projekt** — sie nützt der Browser-, der Server- und der Desktop-Variante
-   gleichermaßen. Voraussetzung: 21 Zugriffe über `ws.cell()` in vier
-   Regelmodulen müssen auf `iter_rows()` umgestellt werden;
-   `rules/_sampling.py` hat das Muster bereits.
+1. **`read_only` war nicht aktiv — inzwischen ist es das.** `_select_tier`
+   setzte in allen drei Tiers `read_only: False`. Das war die höchstwirksame
+   Einzeländerung im ganzen Projekt, weil sie Browser-, Server- und
+   Desktop-Variante gleichermaßen nützt. Umgesetzt in Etappe 1 (Abschnitt 7):
+   ab Tier 2 wird gestreamt, wb_L fällt von 3501 MB auf 58 MB Peak-RSS.
+   Tier 1 lädt weiterhin vollständig — dort laufen die Regeln, die Styles und
+   Blatt-Eigenschaften brauchen.
 2. **Der Pyodide-Aufschlag ist klein.** Gemessen Faktor **1,2 bis 1,6**
    gegenüber CPython — nicht 3 bis 10, wie in der ersten Fassung dieses
    Dokuments geschätzt. Boot 2,0 s, 14 MB entpackt, danach im Browser-Cache.
@@ -252,20 +251,53 @@ Abschnitt 1. Der Go/No-Go-Spike ist damit vorweggenommen: **openpyxl läuft
 unter Pyodide, der Aufschlag ist klein, die Speichergrenze ist der einzige
 echte Engpass — und der ist lösbar.** Entscheidung: Variante A.
 
-### Etappe 1 — `read_only` scharf schalten
+### Etappe 1 — `read_only` scharf schalten ✅ erledigt
 
 Das Fundament. Nützt Browser, Server und Desktop gleichermaßen und ist
 unabhängig von allem Weiteren wertvoll.
 
-| Schritt | Inhalt |
-|---|---|
-| 1.1 | Die 21 `ws.cell()`-Zugriffe in `rules/structure.py` (10), `rules/formulas.py` (5), `rules/implicit_knowledge.py` (5), `rules/volume.py` (1) auf `iter_rows()` umstellen. Muster liegt in `rules/_sampling.py` |
-| 1.2 | `_select_tier` auf `read_only: True` ab Tier 2 umstellen; Docstring und den veralteten Kommentar in `engine.py:359` korrigieren |
-| 1.3 | Regeln, die zwingend Styles brauchen (`needs_styles`), bleiben auf Tier 1 mit vollem Laden — dort ist die Datei klein genug |
-| 1.4 | Regressionstest: Scores und Findings auf `test_messy.xlsx` und `test_pii.xlsx` müssen vor und nach der Umstellung identisch sein |
+| Schritt | Inhalt | Stand |
+|---|---|---|
+| 1.1 | Die 21 `ws.cell()`-Zugriffe in `rules/structure.py` (10), `rules/formulas.py` (5), `rules/implicit_knowledge.py` (5), `rules/volume.py` (1) auf `iter_rows()` umstellen | ✅ erledigt, gemeinsamer Helfer `rules/_sampling.iter_window_rows` |
+| 1.2 | `_select_tier` auf `read_only: True` ab Tier 2 umstellen; Docstring und den veralteten Kommentar in `engine.py:359` korrigieren | ✅ erledigt |
+| 1.3 | Regeln, die zwingend Styles brauchen (`needs_styles`), bleiben auf Tier 1 mit vollem Laden | ✅ erledigt, zwei Regeln nachträglich markiert (siehe unten) |
+| 1.4 | Regressionstest: Scores und Findings auf `test_messy.xlsx` und `test_pii.xlsx` müssen vor und nach der Umstellung identisch sein | ✅ erledigt, zusätzlich Tier 2/3 mit und ohne `read_only` gegeneinander |
 
-**Abnahme:** `bench/bench.py analyze wb_L.xlsx` bleibt unter **300 MB**
-Peak-RSS (heute 3146 MB) bei unveränderten Findings.
+**Abnahme erfüllt:** `analyze` auf wb_L (44,4 MB) braucht **58 MB** Peak-RSS
+statt vorher **3501 MB** — Kriterium war „unter 300 MB". Findings, Score und
+Sheet-Statistiken sind mit und ohne `read_only` identisch (Tier 2 und Tier 3,
+beide Testdateien).
+
+#### Drei Dinge, die der Plan nicht vorhergesehen hatte
+
+1. **Es waren nicht nur die 21 Zugriffe in den Regelmodulen.** `engine.py` hat
+   fünf weitere `ws.cell()`-Stellen (`_row_has_data`, `_find_last_data_col`,
+   `_count_cells_sampled`). Sie sind wahlfreier Zugriff per Binärsuche und
+   damit nicht streaming-fähig — sie liegen aber alle im Tier-1-Zweig, der
+   vollständig lädt. Deshalb kein Blocker, aber sie müssen dort bleiben:
+   **Tier 1 kann nicht auf `read_only` umgestellt werden**, ohne diese
+   Fuzzy-Scan-Logik neu zu bauen.
+2. **Zwei Regeln hätten unter `read_only` abgestürzt**, ohne als
+   `needs_styles` markiert zu sein: `STR-001` (`ws.merged_cells`) und
+   `IMP-010` (`ws.protection`). Beide Attribute gibt es auf
+   `ReadOnlyWorksheet` nicht — `AttributeError` statt Finding. Sie sind jetzt
+   markiert und laufen nur noch in Tier 1. **Preis:** verbundene Zellen und
+   Blattschutz werden bei Dateien über 15 MB nicht mehr gemeldet.
+3. **Die Falle mit den fehlenden Blattmaßen.** Enthält eine XLSX kein
+   `<dimension>`-Element, liefert `ws.max_row` im read-only-Modus `None` —
+   ohne `read_only` rechnet openpyxl den Wert beim Laden aus. Jede Regel prüft
+   aber `if ws.max_row is None: continue`, hätte das Blatt also **stillschweigend
+   übersprungen**: kein Fehler, nur ein leiser falscher Report. Betroffen sind
+   Dateien aus Streaming-Writern — auch die vom Benchmark-Generator erzeugten.
+   `engine._ensure_dimensions` holt die Maße per `calculate_dimension(force=True)`
+   nach. Das kostet einen zusätzlichen Durchlauf (wb_L: 114 s statt 80 s) und
+   greift nur bei Dateien ohne Größenangabe; aus Excel selbst kommt das
+   Element immer mit.
+
+**Offen als Optimierung:** Für Dateien ohne `<dimension>` laufen jetzt zwei
+volle Durchläufe (Maße ermitteln, dann Blattstatistik). Der Statistik-Lauf
+könnte die Maße gleich mitliefern — spart je Blatt einen Durchlauf, erfordert
+aber einen Umbau der Phantom-Erkennung in `analyze_with_progress`.
 
 ### Etappe 2 — Analysekern browserfähig
 
@@ -351,15 +383,13 @@ Auch bei geparkter Challenge sind diese vier später teuer nachzurüsten:
 
 ---
 
-## 9. Erster Schritt
+## 9. Nächster Schritt
 
-**Etappe 1.1**: die 21 `ws.cell()`-Zugriffe auf `iter_rows()` umstellen.
-
-Das ist die höchstwirksame Einzeländerung im Projekt — sie senkt den
-Speicherbedarf um etwa den Faktor 60, macht große Dateien im Browser überhaupt
-erst möglich, beschleunigt gleichzeitig die CLI und die Server-Variante, und
-sie ist unabhängig von jeder Entscheidung über Vercel, WASM oder Container
-wertvoll.
+Etappe 1 ist abgeschlossen (Messwerte oben). **Als Nächstes Etappe 2.1**:
+`analyze()` und `analyze_with_progress()` ein file-like Objekt akzeptieren
+lassen statt nur einen Pfad — die Voraussetzung dafür, dass die Analyse
+überhaupt im Browser laufen kann, wo es keine Dateipfade gibt.
 
 Der Go/No-Go-Spike, der hier ursprünglich stand, ist durch die Messungen in
-Abschnitt 1 bereits beantwortet: **Variante A ist tragfähig.**
+Abschnitt 1 beantwortet: **Variante A ist tragfähig.** Der Speicherengpass,
+der als einziges echtes Risiko übrig war, ist mit Etappe 1 beseitigt.

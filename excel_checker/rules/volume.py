@@ -10,6 +10,7 @@ from openpyxl.utils import get_column_letter
 
 from excel_checker.i18n import _
 from excel_checker.models import Category, Finding, Severity
+from excel_checker.rules._sampling import iter_window_rows
 from excel_checker.rules.base import BaseRule
 
 
@@ -70,9 +71,8 @@ class FormulaDensityRule(BaseRule):
             formula_count = 0
             static_count = 0
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for _row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for cell in row:
                     if cell.value is None:
                         continue
                     if cell.data_type == 'f':

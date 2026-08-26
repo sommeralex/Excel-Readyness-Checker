@@ -13,6 +13,7 @@ from openpyxl.formatting.rule import CellIsRule, FormulaRule
 
 from excel_checker.i18n import _
 from excel_checker.models import Category, Finding, Severity
+from excel_checker.rules._sampling import iter_window_rows
 from excel_checker.rules.base import BaseRule
 
 
@@ -72,9 +73,9 @@ class UndocumentedColorCodesRule(BaseRule):
             font_colors: Counter = Counter()
             color_examples: dict[str, list] = defaultdict(list)
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
+                    col_idx = col_pos + 1
 
                     # Hintergrundfarbe (GradientFill hat kein fgColor)
                     try:
@@ -164,9 +165,8 @@ class UndocumentedColorCodesRule(BaseRule):
             # Suche in den ersten 20 Zeilen nach Legende-Begriffen
             max_row = min(ws.max_row or 1, 20)
             max_col = min(ws.max_column or 1, 20)
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for _row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for cell in row:
                     if isinstance(cell.value, str):
                         if any(kw in cell.value.lower()
                                for kw in self.LEGEND_KEYWORDS):
@@ -323,11 +323,11 @@ class MagicNumbersRule(BaseRule):
             magic_values: Counter = Counter()
             magic_examples: dict[str, list] = defaultdict(list)
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
                     if cell.data_type != 'f' or not isinstance(cell.value, str):
                         continue
+                    col_idx = col_pos + 1
                     formula = cell.value
                     numbers = self.MAGIC_PATTERN.findall(formula)
                     for num_str in numbers:
@@ -488,11 +488,11 @@ class CommentsWithLogicRule(BaseRule):
 
             logic_comments = []
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for col_pos, cell in enumerate(row):
+                    col_idx = col_pos + 1
                     comment_text = ""
-                    if cell.comment:
+                    if getattr(cell, "comment", None):
                         comment_text = str(cell.comment.text or "").lower()
 
                     if comment_text:
@@ -556,9 +556,8 @@ class CustomNumberFormatsRule(BaseRule):
 
             suspicious_formats: Counter = Counter()
 
-            for row_idx in range(1, max_row + 1):
-                for col_idx in range(1, max_col + 1):
-                    cell = ws.cell(row=row_idx, column=col_idx)
+            for _row_idx, row in iter_window_rows(ws, max_row, max_col):
+                for cell in row:
                     if cell.number_format and cell.number_format != 'General':
                         fmt = cell.number_format
                         for pattern, desc in self.SUSPICIOUS_FORMATS:
@@ -598,6 +597,7 @@ class ProtectedAreasRule(BaseRule):
 
     rule_id = "IMP-010"
     rule_name = "Blattschutz & gesperrte Bereiche"
+    needs_styles = True  # ws.protection ist im read_only-Modus nicht verfügbar
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
