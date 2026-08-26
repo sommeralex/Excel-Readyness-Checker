@@ -48,8 +48,9 @@ auftaucht. Das Risiko ist asymmetrisch — auf der Karte zu stehen kann nur
 schaden, nie nützen. Genau die Firmen, die man gewinnen will, springen ab.
 
 **Gegenmaßnahme — Zwei-Ebenen-Modell**
-- **Öffentlich**: nur Geografie und Branche (Stadt / Bundesland / Land / NACE-
-  Sektor), k-anonymisiert. Nie ein Firmenname ohne aktives Opt-in.
+- **Öffentlich**: nur aggregiert und k-anonymisiert — und zwar primär nach
+  Branche und Funktionsbereich, erst nachrangig nach Geografie (Details in 3.2).
+  Nie ein Firmenname ohne aktives Opt-in.
 - **Privat**: der interne Wettbewerb Abteilung gegen Abteilung, Tochter gegen
   Tochter — sichtbar nur innerhalb der Organisation. **Hier sitzt die echte
   Virialität.** Interner Wettbewerb ist sozial anschlussfähig, öffentliches
@@ -90,7 +91,8 @@ brauchen Dichte. Am Tag 1 gibt es null Daten — Cold-Start-Problem in Reinform.
   der Veröffentlichung, (b) den Presse-Aufhänger, (c) Referenzwerte für Perzentile
   — ganz ohne einen einzigen Upload. Öffentliche Daten öffentlicher Stellen zu
   bewerten ist zulässig und journalistisch anschlussfähig.
-- Karte erst freischalten, wenn eine Region die k-Schwelle erreicht.
+- Karte erst mit Score einfärben, wenn eine Region die Veröffentlichungs-
+  schwelle erreicht; bis dahin zeigt sie nur Beteiligung (siehe 3.2).
 
 ### 1.5 Virialität in B2B kommt nicht vom Leaderboard, sondern vom teilbaren Artefakt
 
@@ -170,7 +172,9 @@ Positionierung: **Datenreife-Index**, mit klar formuliertem Geltungsbereich.
 |---|---|
 | Datenreife-Index v1.0, versioniert & offen dokumentiert | „AI-Readiness-Score" |
 | Interner Wettbewerb (Abteilung vs. Abteilung) als Kern | öffentliches Firmen-Ranking |
-| Öffentlich nur Geografie + Branche, k-anonymisiert | Firmennamen auf der Karte |
+| Öffentlich verglichen wird nach **Branche und Funktionsbereich** | Geografie als Hauptachse |
+| Öffentlich nur aggregiert, k-anonymisiert, n immer sichtbar | Firmennamen auf der Karte |
+| Stadt-Ebene nur als Beteiligungszahl, nie mit Score | Score pro Stadt |
 | Lokale Analyse, nur Zahlen-Payload zum Server | Server-Upload mit Löschversprechen |
 | Perzentil + Score-Karte als Launch-Visual | Karte als Launch-Visual |
 | Beteiligung & Verbesserung als Primärkennzahl | absoluter Score als Primärkennzahl |
@@ -229,8 +233,10 @@ Datenschutzversprechen wert ist.
   "entity": {
     "org_id":  "sha256(org_secret + org_slug)",     // pseudonym, serverseitig salted
     "unit_id": "sha256(org_secret + unit_slug)",    // Abteilung/Tochter
-    "country": "AT", "region": "AT21", "city": "Klagenfurt",   // Stadt nur ab Größe X
-    "industry": "D"                                            // NACE Abschnitt
+    "country": "AT", "region": "AT21", "city": "Klagenfurt",   // Stadt nur für Beteiligung
+    "sector": "manufacturing",       // gebündelter Sektor, selbst deklariert
+    "function": "controlling",       // Funktionsbereich, selbst deklariert
+    "org_size": "250+"               // EU-KMU-Klasse, selbst deklariert
   },
 
   "fingerprint": "sha256(salt + strukturelle Merkmale)",   // Dedupe + Verbesserungs-Match
@@ -242,12 +248,89 @@ Datenschutzversprechen wert ist.
 Zellinhalte, Zellreferenzen, Beispielwerte, Freitext aus Findings, exakte
 Zeilen-/Spaltenzahlen, LLM-Ausgaben, Nutzername, IP.
 
-### 3.2 k-Anonymität
+### 3.2 Aggregationsebenen — wer sieht was
 
-Eine Entität erscheint erst im öffentlichen Board, wenn **≥ 5 verschiedene
-Einreicher** und **≥ 10 Dateien** vorliegen. Darunter rollt sie in die
-übergeordnete Ebene auf (Stadt → Bundesland → Land). Die Schwelle steht in der
-Config, wird auf jeder Ansicht ausgewiesen und ist Teil der Methodikseite.
+Die zentrale Frage ist nicht „Land oder Stadt", sondern: **auf welcher Achse
+wird öffentlich verglichen?** Drei Achsen stehen zur Wahl, und die naheliegende
+ist die schwächste.
+
+**Geografie ist die schwächste Achse.** Sie erklärt Datenreife kaum — ein
+Maschinenbauer in Graz hat dieselben Excel-Probleme wie einer in Linz. Sie ist
+zugleich der schlechteste Anonymitätsschutz, weil Stadt + Branche in Österreich
+oft eindeutig identifiziert. Und sie braucht am längsten, bis n reicht.
+
+**Branche und Abteilungstyp sind die starken Achsen.** Hier variiert
+Datenreife tatsächlich: Regulierungsdruck (Banken, Versicherungen, Pharma)
+gegen wenig regulierte Branchen; Controlling gegen HR gegen Vertrieb gegen
+Produktion. Beide Achsen funktionieren bei kleinem n, stellen keine Firma bloß,
+und jeder Teilnehmer findet sich in einer Kategorie wieder — das ist die
+Voraussetzung dafür, dass jemand das Ergebnis teilt.
+
+Beide Merkmale werden beim Einreichen selbst deklariert (zwei Dropdowns:
+gebündelter Sektor statt NACE-Vollsystematik, plus Funktionsbereich). Billig zu
+erheben, sofort vergleichbar.
+
+#### Sichtbarkeitsmatrix
+
+| Ebene | Sichtbarkeit | Freischaltung |
+|---|---|---|
+| **Land** | öffentlich ab Tag 1 | aus der Baseline-Studie, nicht aus Nutzerdaten |
+| **Branche** (8–10 Sektoren) | öffentlich | ab Schwelle (unten) |
+| **Funktionsbereich** (Controlling, HR, Vertrieb, Produktion, Finanzen, IT, Einkauf, Marketing) | öffentlich | ab Schwelle |
+| **Größenklasse** (EU-KMU-Definition) | öffentlich, nur als Querschnitt | ab Schwelle |
+| **Bundesland / NUTS-2** | öffentlich, aber später | ab Schwelle, frühestens Phase 3 |
+| **Stadt** | **nie mit Score** — nur Beteiligungszahl | — |
+| **Firma** | nur Opt-in-Badge der Firma selbst | — |
+| **Tochter / Standort / Abteilung** | nur organisationsintern | ab interner Schwelle |
+| **Person** | **nie**, auch nicht intern | — |
+
+**Warum Stadt nie mit Score:** Es gibt in Österreich Städte mit 20.000
+Einwohnern und einem dominanten Arbeitgeber. „Datenreife in Ranshofen: 31/100"
+ist faktisch ein Firmen-Rating. Auch k = 5 hilft nicht, wenn die fünf
+Einreicher aus fünf Abteilungen derselben Firma kommen.
+
+**„Global" ist vorerst DACH.** Realistisch stehen am Anfang AT, DE und CH im
+Vergleich. Alles darüber hinaus kommt aus der Baseline-Studie (siehe unten),
+nicht aus Nutzereinreichungen. Ein Ländervergleich mit drei bis fünf Einheiten
+ist kein Ranking — er ist eine Aussage, und als solche gehört er in den Report,
+nicht auf ein Leaderboard.
+
+#### Der Länder-Aufhänger kommt aus Open Data, nicht von Nutzern
+
+Offene Datenportale existieren in fast jedem EU-Land: data.gv.at, GovData.de,
+opendata.swiss, data.gouv.fr, dazu data.europa.eu als Dach. Alle publizieren
+XLSX. Damit lässt sich ein **europäischer Ländervergleich am Tag 1
+veröffentlichen — ohne einen einzigen Nutzer.** Das macht aus „Österreich hinkt
+hinterher" eine belegte Aussage statt einer Behauptung, und es entkoppelt die
+Kernerzählung vollständig von der Teilnehmerzahl.
+
+#### Veröffentlichungsschwelle
+
+Eine Kategorie erscheint erst mit Score, wenn alle drei Bedingungen gelten:
+
+- **≥ 5 unabhängige Organisationen** (nicht bloß fünf Einreicher — fünf
+  Einreicher können aus einer Firma kommen)
+- **≥ 25 gewertete Dateien**
+- **Dominanzkappung: keine Organisation stellt mehr als 40 % der Dateien.**
+  Ohne diese Regel definiert eine einzelne begeisterte Firma mit 200 Dateien
+  das Ergebnis für „Kärnten" oder „Maschinenbau".
+
+Darunter rollt die Kategorie in die übergeordnete Ebene auf (Stadt →
+Bundesland → Land, Feinbranche → Sektor). Die Schwellen stehen in der Config,
+werden auf jeder Ansicht mit ausgewiesen und sind Teil der Methodikseite. Das
+n steht immer neben dem Score.
+
+#### Was die Karte tatsächlich zeigt
+
+Zwei Kodierungen mit zwei unterschiedlichen Granularitäten — beide ehrlich:
+
+- **Blasen pro Stadt = Beteiligung** (Anzahl Einreichungen, kein Score). Füllt
+  die Karte optisch, verrät nichts, funktioniert ab dem ersten Teilnehmer.
+- **Flächenfarbe pro Bundesland/Land = Median-Index**, erst ab Schwelle, sonst
+  neutral eingefärbt mit dem Hinweis „noch zu wenige Daten".
+
+Damit sieht die Karte früh lebendig aus, ohne eine einzige Aussage zu treffen,
+die der Datenbestand nicht trägt.
 
 ### 3.3 Datenmodell (minimal)
 
@@ -286,8 +369,8 @@ Keine Rohdateien, keine Nutzertabelle in Phase 1–2 (Magic-Link statt Accounts)
 |---|---|
 | 1.1 | `excel-reifecheck challenge <ordner>` — scannt rekursiv, zeigt das vollständige Payload im Klartext an, sendet **erst nach expliziter Bestätigung**. Das ist der unternehmenstaugliche Pfad und die Vertrauensgeschichte. |
 | 1.2 | Ordner-Scan liefert echte Stichproben → löst 1.1 (Cherry-Picking) an der Wurzel |
-| 1.3 | Baseline-Harvester: XLSX von data.gv.at, EU Open Data, Statistik Austria, Stadtportalen → analysieren → Referenzverteilung |
-| 1.4 | Publikation „Datenreife-Report Österreich 2026": gefüllte Karte + Presse-Aufhänger + Perzentil-Basis am Tag 1 |
+| 1.3 | Baseline-Harvester: XLSX von data.gv.at, GovData.de, opendata.swiss, data.europa.eu, Statistik Austria → analysieren → Referenzverteilung **je Land** |
+| 1.4 | Publikation „Datenreife-Report Österreich 2026": Ländervergleich + gefüllte Karte + Perzentil-Basis am Tag 1 — vollständig ohne Nutzerdaten |
 | 1.5 | Perzentil-Anzeige im bestehenden Report („sauberer als 68 %") |
 | — | *Stretch*: Pyodide/WASM-Variante („läuft im Browser, nichts wird übertragen"). Stärkeres Marketing, deutlich mehr Aufwand — erst nach Phase 2 bewerten. |
 
@@ -295,7 +378,7 @@ Keine Rohdateien, keine Nutzertabelle in Phase 1–2 (Magic-Link statt Accounts)
 
 | # | Aufgabe |
 |---|---|
-| 2.1 | Org/Unit-Modell, Einladungslinks pro Abteilung, Magic-Link statt Accounts |
+| 2.1 | Org/Unit-Modell, Einladungslinks pro Abteilung, Magic-Link statt Accounts; Sektor/Funktion/Größenklasse als Dropdowns beim Einreichen |
 | 2.2 | Privacy-Schalter durch die Org selbst: `privat` / `nur aggregiert` / `öffentliches Badge`. Default: `privat`. |
 | 2.3 | Internes Board: Abteilung vs. Abteilung, Median + Verteilung + n |
 | 2.4 | **Score-Karte** als server-gerendertes PNG/OG-Bild — das virale Kernartefakt |
@@ -306,9 +389,9 @@ Keine Rohdateien, keine Nutzertabelle in Phase 1–2 (Magic-Link statt Accounts)
 
 | # | Aufgabe |
 |---|---|
-| 3.1 | Öffentliches Board: Land / Bundesland / Stadt / Branche, k-anonymisiert, n immer sichtbar |
-| 3.2 | Karte: MapLibre GL, **selbst gehostete** Vector-Tiles (kein externer Tile-CDN — sonst bricht das Datenschutzversprechen an der eigenen Karte). Primärkodierung = Beteiligung (Blasengröße), Sekundär = Median-Index (Farbe). Choropleth allein über Scores ist bei ungleichem n irreführend. |
-| 3.3 | Branchen-Benchmarks (NACE-Abschnitt) |
+| 3.1 | Öffentliches Board: **Branche und Funktionsbereich zuerst**, Bundesland danach; Veröffentlichungsschwelle inkl. Dominanzkappung, n immer sichtbar |
+| 3.2 | Karte: MapLibre GL, **selbst gehostete** Vector-Tiles (kein externer Tile-CDN — sonst bricht das Datenschutzversprechen an der eigenen Karte). Blasengröße = Beteiligung je Stadt (ohne Score), Flächenfarbe = Median-Index je Bundesland/Land ab Schwelle. Choropleth allein über Scores ist bei ungleichem n irreführend. |
+| 3.3 | Feinere Branchen-Benchmarks, sobald n trägt (NACE-Abschnitt statt gebündeltem Sektor) |
 | 3.4 | Quartals-„Seasons" mit Reset → wiederkehrende Nachrichtenanlässe statt Einmal-PR |
 
 ### Phase 4 — Governance (laufend)
@@ -325,6 +408,8 @@ Einreichungen, offener Regelsatz, dokumentierte Aggregationsregeln.
 - Kein LLM im Challenge-Pfad (Kosten, Datenabfluss, Nichtdeterminismus).
 - Keine Echtzeit-Karte (stündliche Aggregate genügen, sind billiger und stabiler).
 - Keine Firmennamen ohne aktives Opt-in der Firma selbst.
+- Kein Score auf Stadt-Ebene — dort nur die Beteiligungszahl.
+- Kein Länder-Leaderboard aus Nutzerdaten; der Ländervergleich kommt aus der Baseline-Studie.
 - Keine externen Karten-/Font-CDNs auf Challenge-Seiten (`theme.css` lädt heute
   Fonts von `rsms.me` und `jsdelivr` — für die öffentliche Challenge selbst hosten).
 
