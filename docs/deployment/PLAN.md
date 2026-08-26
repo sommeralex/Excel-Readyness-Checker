@@ -46,6 +46,60 @@ Vier harte Blocker im aktuellen Code:
 *Die konkreten Vercel-Limits vor der Umsetzung nachprüfen — sie ändern sich.
 Blocker 1 bis 3 sind davon unabhängig strukturell.*
 
+### 2.1 Zur Klarstellung: Vercel ja, Flask-auf-Vercel nein
+
+Die Empfehlung lautet **Vercel**. Das „nicht Vercel" in Abschnitt 5 bezieht
+sich ausschließlich auf die Brückenvariante, bei der die Flask-App unverändert
+bleibt. Zwei verschiedene Dinge:
+
+| Variante | Plattform | Bewertung |
+|---|---|---|
+| **A — statische App, Analyse im Browser** | **Vercel** | **Empfehlung.** Genau das, wofür Vercel gebaut ist |
+| B — Flask unverändert, Server nötig | Container (Fly, Hetzner, Railway) | Brücke, wenn es diese Woche live sein muss |
+| C — Flask serverless-tauglich umgebaut | Vercel | Möglich, aber teuer — siehe 2.2 |
+
+### 2.2 Warum die Blocker strukturell sind und nicht konfigurierbar
+
+Vercels Modell ist **zustandslose, kurzlebige Funktionsaufrufe hinter einem
+CDN**. Die Flask-App setzt **einen langlebigen Prozess mit gemeinsamem
+Speicher** voraus. Die Unvereinbarkeit hat drei Ursachen, und keine davon ist
+eine Einstellung:
+
+1. **Geteilter Zustand über Requests hinweg.** `_reports`, `_report_data` und
+   `_sessions` sind modulweite Dicts. Der Upload-Request schreibt hinein, ein
+   *anderer* Request (`/progress/<id>`, `/report/<id>`) liest heraus. Auf
+   Vercel landet der zweite Request potenziell auf einer anderen Instanz — das
+   ist kein Timing-Problem, sondern ein direkter 404.
+2. **Arbeit, die die Response überlebt.** `_start_analysis` startet einen
+   Daemon-Thread und kehrt sofort zurück; die Analyse läuft weiter, während der
+   Client den SSE-Stream öffnet. Serverless friert die Instanz nach der
+   Response ein oder beendet sie. Der Thread ist tot.
+3. **Minutenlang offene Streaming-Response.** SSE hält die Verbindung über die
+   gesamte Analyse — das ist ein Funktionsaufruf, der gegen die maximale
+   Laufzeit läuft und die ganze Zeit abgerechnet wird.
+
+Dazu das Body-Limit (Blocker 1). Für das gibt es zwar einen Standard-Workaround
+— der Client lädt direkt in einen Blob-Store, die Funktion liest von dort —
+aber **dieser Workaround bedeutet, dass die Datei gespeichert wird.** Genau das
+zerstört die Vertrauensaussage aus Abschnitt 1 und damit den Zugang zu den
+tagtäglich eingesetzten Excels.
+
+### 2.3 Variante C wäre machbar — und teurer als die Portierung
+
+Ehrlichkeitshalber: Flask *lässt* sich serverless-tauglich umbauen. Nötig wären
+
+- Blob-Storage für den Upload (Vercel Blob oder S3),
+- eine Queue plus separater Worker für die Analyse, weil sie die
+  Funktionslaufzeit sprengt,
+- Redis oder Postgres für Session- und Report-Zustand,
+- Polling statt SSE für den Fortschritt.
+
+Das ist ein verteiltes System mit vier zusätzlichen Diensten. Es kostet mehr
+Aufwand als die WASM-Portierung, verursacht laufende Kosten pro Analyse,
+skaliert im viralen Fall nur gegen Geld — und bringt die Datei zurück auf
+fremde Server. Variante A ist nicht der Kompromiss, sondern die günstigere und
+zugleich stärkere Lösung.
+
 Ein Umbau auf Blob-Upload plus Queue plus externem Report-Store wäre die
 Serverless-taugliche Variante — und damit ein größeres Projekt als das, was
 stattdessen möglich ist.
@@ -112,10 +166,11 @@ dort ist „installier dir erst Python" bereits das Ende des Gesprächs.
 
 ---
 
-## 5. Wenn der Server trotzdem sein soll
+## 5. Brückenvariante B: Wenn der Server trotzdem sein soll
 
 Falls die WASM-Portierung zu weit weg ist und diese Woche etwas live sein muss:
-**nicht Vercel, sondern Container.** Fly.io, Railway, Render oder Hetzner mit
+**für diesen einen Fall nicht Vercel, sondern Container.** Der Grund ist nicht
+Vercel, sondern die unveränderte Flask-App (siehe 2.2). Fly.io, Railway, Render oder Hetzner mit
 Docker, Region Frankfurt. Der Code bleibt unverändert, SSE funktioniert,
 kein Body-Limit, DSGVO-Hosting geklärt. Aufwand ein bis zwei Tage.
 
