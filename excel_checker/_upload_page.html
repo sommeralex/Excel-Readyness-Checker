@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Excel-Reifecheck</title>
 <link rel="stylesheet" href="/static/theme.css">
+<script src="/static/browser_analysis.js" defer></script>
 <style>
   /* Seiten-spezifisch: Body wird hier zentriert (Upload-Layout). */
   body {
@@ -668,23 +669,19 @@ function stopTimer(els) {
   if (els._timerInterval) clearInterval(els._timerInterval);
 }
 
-function handleSSE(sessionId, els) {
-  return new Promise((resolve, reject) => {
-    const source = new EventSource('/progress/' + sessionId);
-    let lastLi = null;
-
-    source.addEventListener('progress', (e) => {
-      const data = JSON.parse(e.data);
-
+// Zeichnet ein Fortschritts-Event. Bewusst unabhaengig von der Quelle:
+// frueher kam es per SSE vom Server, heute per postMessage aus dem Worker —
+// das Format ist in beiden Faellen dasselbe ProgressEvent aus engine.py.
+function applyProgress(data, els, state) {
       // Prozent aktualisieren
       els.pct.textContent = data.pct + '%';
       els.fill.style.width = data.pct + '%';
       els.text.textContent = data.step;
 
       // Vorheriges Element als "done" markieren
-      if (lastLi && data.status !== 'error') {
-        lastLi.className = 'done';
-        lastLi.querySelector('.icon').innerHTML = '✅';
+      if (state.lastLi && data.status !== 'error') {
+        state.lastLi.className = 'done';
+        state.lastLi.querySelector('.icon').innerHTML = '✅';
       }
 
       // Neues Element hinzufügen
@@ -695,7 +692,7 @@ function handleSSE(sessionId, els) {
                      '<span>' + data.step + '</span>' +
                      (data.detail ? '<span class="detail">' + data.detail + '</span>' : '');
       els.steps.appendChild(li);
-      lastLi = li;
+      state.lastLi = li;
 
       // Queued-Schritte anzeigen (anstehende Regeln)
       if (data.queue) {
@@ -734,6 +731,15 @@ function handleSSE(sessionId, els) {
         li.querySelector('.icon').innerHTML = '🎉';
         els.steps.querySelectorAll('.queued').forEach(el => el.remove());
       }
+}
+
+function handleSSE(sessionId, els) {
+  return new Promise((resolve, reject) => {
+    const source = new EventSource('/progress/' + sessionId);
+    const state = { lastLi: null };
+
+    source.addEventListener('progress', (e) => {
+      applyProgress(JSON.parse(e.data), els, state);
     });
 
     source.addEventListener('report', (e) => {
@@ -819,11 +825,74 @@ dropZone.addEventListener('drop', (e) => {
   }
 });
 
+// Zeigt den fertigen Report ohne Netzwerkzugriff: als eigenes Dokument in
+// einem iframe. srcdoc statt Server-Route — den Report gibt es nur hier im
+// Browser, es existiert keine URL, unter der er abrufbar waere.
+function showReportOverlay(html) {
+  let overlay = document.getElementById('reportOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'reportOverlay';
+    overlay.style.cssText =
+      'position:fixed; inset:0; z-index:9999; background:var(--bg, #fff); display:flex; flex-direction:column;';
+    const bar = document.createElement('div');
+    bar.style.cssText =
+      'display:flex; gap:0.75rem; align-items:center; padding:0.6rem 1rem; border-bottom:1px solid rgba(128,128,128,0.3);';
+    const back = document.createElement('button');
+    back.className = 'btn btn-sm';
+    back.textContent = '← Zurück';
+    back.onclick = () => { overlay.style.display = 'none'; };
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:0.9rem; opacity:0.7;';
+    label.textContent = 'Report – erzeugt in diesem Browser, nicht hochgeladen';
+    bar.appendChild(back);
+    bar.appendChild(label);
+    const frame = document.createElement('iframe');
+    frame.id = 'reportFrame';
+    frame.style.cssText = 'flex:1; width:100%; border:0;';
+    overlay.appendChild(bar);
+    overlay.appendChild(frame);
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = 'flex';
+  document.getElementById('reportFrame').srcdoc = html;
+}
+
+function saveReport(html, sourceName) {
+  const base = (sourceName || 'report').replace(/\.[^.]+$/, '');
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = base + '_reifecheck.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Objekt-URL wieder freigeben, sonst haelt der Browser den Report im
+  // Speicher, bis der Tab geschlossen wird.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+function reportButton(id, text, extraStyle) {
+  let btn = document.getElementById(id);
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = id;
+    btn.className = 'btn';
+    btn.style.cssText = 'margin-top:1.5rem;' + (extraStyle || '');
+    btn.textContent = text;
+    document.getElementById('progress').appendChild(btn);
+  }
+  btn.style.display = '';
+  return btn;
+}
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  if (!fileInput.files[0]) return;
+  const file = fileInput.files[0];
+  if (!file) return;
   submitBtn.disabled = true;
-  submitBtn.textContent = '⏳ Wird hochgeladen...';
+  submitBtn.textContent = '⏳ Wird geprüft...';
   dropZone.style.display = 'none';
 
   const prevShowBtn = document.getElementById('showReportBtn');
@@ -832,68 +901,36 @@ form.addEventListener('submit', async (e) => {
   if (prevDownloadBtn) prevDownloadBtn.style.display = 'none';
 
   const els = startProgress('');
+  const state = { lastLi: null };
 
-  // 1. Upload per AJAX
-  const formData = new FormData();
-  formData.append('file', fileInput.files[0]);
+  // Ehrliche Ansage statt Spinner ins Blaue: Die Schaetzung kommt aus den
+  // Messungen in bench/README.md.
+  els.text.textContent = 'Die Datei bleibt in diesem Browser. Dauer: '
+    + BrowserAnalysis.formatEstimate(file.size) + '.';
 
   try {
-    const resp = await fetch('/upload', { method: 'POST', body: formData });
-    const result = await resp.json();
+    const result = await BrowserAnalysis.analyseFile(file, {
+      onBoot: (step) => { els.text.textContent = step; },
+      onProgress: (evt) => { applyProgress(evt, els, state); },
+    });
+    stopTimer(els);
 
-    if (!resp.ok) {
-      throw new Error(result.error || 'Upload fehlgeschlagen');
-    }
+    const showBtn = reportButton('showReportBtn', '➡️ Report anzeigen');
+    showBtn.onclick = () => showReportOverlay(result.html);
+    const downloadBtn = reportButton('downloadReportBtn', '⬇️ Report speichern',
+                                     'margin-left:1rem;');
+    downloadBtn.onclick = () => saveReport(result.html, file.name);
 
-    // 2. SSE Progress starten
-    const reportId = await handleSSE(result.session_id, els);
-
-    // 3. Buttons für Anzeigen und Download anzeigen
-    const progressDiv = document.getElementById('progress');
-    let showBtn = document.getElementById('showReportBtn');
-    let downloadBtn = document.getElementById('downloadReportBtn');
-    if (!showBtn) {
-      showBtn = document.createElement('button');
-      showBtn.id = 'showReportBtn';
-      showBtn.className = 'btn';
-      showBtn.style.marginTop = '1.5rem';
-      showBtn.textContent = '➡️ Report anzeigen';
-      showBtn.onclick = () => {
-        window.open('/report/' + reportId, '_blank');
-      };
-      progressDiv.appendChild(showBtn);
-    } else {
-      showBtn.style.display = '';
-      showBtn.onclick = () => {
-        window.open('/report/' + reportId, '_blank');
-      };
-    }
-    if (!downloadBtn) {
-      downloadBtn = document.createElement('button');
-      downloadBtn.id = 'downloadReportBtn';
-      downloadBtn.className = 'btn';
-      downloadBtn.style.marginTop = '1.5rem';
-      downloadBtn.style.marginLeft = '1rem';
-      downloadBtn.textContent = '⬇️ Report herunterladen';
-      downloadBtn.onclick = () => {
-        window.open('/download-report/' + reportId, '_blank');
-      };
-      progressDiv.appendChild(downloadBtn);
-    } else {
-      downloadBtn.style.display = '';
-      downloadBtn.onclick = () => {
-        window.open('/download-report/' + reportId, '_blank');
-      };
-    }
-    // Erfolgsmeldung anzeigen – Report-Buttons bleiben sichtbar,
-    // bis der User einen neuen Upload startet (dort werden sie ausgeblendet).
-    els.text.textContent = '✅ Regelprüfung abgeschlossen. Sie können jetzt den Report anzeigen oder herunterladen.';
+    els.text.textContent = '✅ Regelprüfung abgeschlossen – Score '
+      + result.score + '/100, ' + result.findings + ' Befunde. '
+      + 'Die Datei hat Ihren Browser nie verlassen.';
     submitBtn.disabled = false;
     submitBtn.textContent = '🔍 Health Check starten';
     dropZone.style.display = '';
     fileName.classList.remove('visible');
     fileInput.value = '';
   } catch (err) {
+    stopTimer(els);
     errorMsg.textContent = err.message;
     errorMsg.classList.add('visible');
     submitBtn.disabled = false;
@@ -901,6 +938,12 @@ form.addEventListener('submit', async (e) => {
     dropZone.style.display = '';
     document.getElementById('progress').classList.remove('visible');
   }
+});
+
+// Pyodide schon beim Seitenaufbau holen, damit der erste Klick nicht auf
+// 13 MB warten muss. Schlaegt es fehl, faellt es beim Analysestart erneut an.
+window.addEventListener('load', () => {
+  BrowserAnalysis.warmUp().catch(() => {});
 });
 
 // === URL Form ===

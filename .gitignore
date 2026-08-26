@@ -14,6 +14,10 @@ venv/
 # Benchmark-Testdateien (gross, per bench/gen.py reproduzierbar)
 bench/wb_*.xlsx
 
+# Pyodide + Wheels fuer die Browser-Analyse (~13 MB),
+# per tools/fetch_vendor.py reproduzierbar
+excel_checker/static/vendor/
+
 # Generierte Test-Reports
 test_*_report.html
 test_effizienz_report.html

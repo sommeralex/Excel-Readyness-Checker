@@ -27,6 +27,23 @@ cp bench/bench.html bench/wb_*.xlsx srv/
 .venv-bench/bin/python bench/run_bench.py
 ```
 
+## Die Seite als Ganzes prüfen
+
+`run_page_check.py` fährt die echte Upload-Seite in Chromium, legt eine
+Datei ein und prüft, was dabei passiert — vor allem, was **nicht** passiert:
+
+```bash
+python tools/fetch_vendor.py                 # einmalig
+PYTHONIOENCODING=utf-8 python -m excel_checker.webapp &
+.venv/bin/python bench/run_page_check.py http://127.0.0.1:5000 test_messy.xlsx test_pii.xlsx
+```
+
+Der Test schlägt fehl, sobald nach dem Seitenaufbau ein Request an
+`/upload`, `/upload-url`, `/progress`, `/report`, `/download-report` oder
+`/analyze` geht. Mehrere Dateien in einem Aufruf laufen nacheinander in
+derselben Seite — das prüft nebenbei, dass je Analyse ein frischer Worker
+gestartet und danach beendet wird.
+
 ## Analysekern im Browser prüfen
 
 `wasm_check.html` lädt das gebaute Wheel in Pyodide, analysiert eine Datei

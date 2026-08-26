@@ -1,6 +1,6 @@
 # Ausliefern statt Hosten — Reifecheck als Web-App und als Download
 
-Status: v4 (Etappe 1 und 2 umgesetzt) · Basis: Codestand `c4e4939` · Entscheidungsvorlage
+Status: v5 (Etappen 1–3 umgesetzt) · Basis: Codestand `59ae079` · Entscheidungsvorlage
 
 ---
 
@@ -352,18 +352,49 @@ Ergebnis über die Browser-Frage hinaus: **derselbe Input erzeugt jetzt
 denselben Report.** Vorher nicht — was jeden Vorher-Nachher-Vergleich und
 jeden geteilten Deep-Link unzuverlässig machte.
 
-### Etappe 3 — Worker und Oberfläche
+### Etappe 3 — Worker und Oberfläche ✅ erledigt
 
-| Schritt | Inhalt |
-|---|---|
-| 3.1 | Web Worker: Pyodide plus Wheels laden, Fortschritts-Events des Generators per `postMessage` weiterreichen — Ereignisformat bleibt wie beim SSE-Stream |
-| 3.2 | **Frischer Worker je Analyse, danach `terminate()`** (Heap schrumpft nie, siehe 1.3) |
-| 3.3 | `_upload_page.html` von `EventSource` auf Worker umstellen — nur die Ereignisquelle tauschen, die Anzeige bleibt |
-| 3.4 | Report-HTML direkt in den DOM statt über `/report/<id>`; „Als Datei speichern" ersetzt den Download-Endpunkt |
-| 3.5 | Ehrliche Laufzeitangabe in der UI, abgeleitet aus der Dateigröße |
+| Schritt | Inhalt | Stand |
+|---|---|---|
+| 3.1 | Web Worker: Pyodide plus Wheels laden, Fortschritts-Events des Generators per `postMessage` weiterreichen — Ereignisformat bleibt wie beim SSE-Stream | ✅ `static/analysis_worker.js` |
+| 3.2 | **Frischer Worker je Analyse, danach `terminate()`** | ✅ `static/browser_analysis.js`; geprüft mit zwei Läufen hintereinander in derselben Seite |
+| 3.3 | `_upload_page.html` von `EventSource` auf Worker umstellen — nur die Ereignisquelle tauschen, die Anzeige bleibt | ✅ `applyProgress()` herausgelöst, wird von beiden Quellen benutzt |
+| 3.4 | Report-HTML direkt in den DOM statt über `/report/<id>`; „Als Datei speichern" ersetzt den Download-Endpunkt | ✅ `<iframe srcdoc>` plus Blob-Download |
+| 3.5 | Ehrliche Laufzeitangabe in der UI, abgeleitet aus der Dateigröße | ✅ `estimateSeconds()`, geeicht an den Messungen aus `bench/README.md` |
 
-**Abnahme:** Datei per Drag-and-drop → Fortschritt → Report, und im
-Netzwerk-Tab passiert nach dem Seitenaufbau nichts mehr.
+**Abnahme erfüllt** (`bench/run_page_check.py`, fährt die echte Seite in
+Chromium):
+
+- Datei per File-Input → Fortschritt (42 Events, dieselben wie früher per
+  SSE) → Report.
+- **Kein `/upload`, kein `/progress`, kein `/report`.** Nach dem
+  Seitenaufbau gehen ausschließlich statische Dateien der eigenen Domain
+  über die Leitung. Der Test prüft das nicht per Augenschein, sondern
+  schneidet alle Requests mit und lässt keinen der alten Endpunkte durch.
+- Der im Browser erzeugte Report ist **identisch** zum CPython-Report
+  (beide Testdateien).
+- Zwei Analysen hintereinander in derselben Seite laufen sauber durch —
+  das ist der eigentliche Test für 3.2.
+
+#### Entscheidungen, die dabei angefallen sind
+
+- **Pyodide braucht einen Module-Worker.** Ein klassischer Worker bricht mit
+  „Classic web workers are not supported" ab. Daher `new Worker(url, {type:
+  'module'})` und dynamisches `import()` statt `importScripts`.
+- **Pyodide wird beim Seitenaufbau vorgewärmt**, nicht erst beim Klick.
+  Sonst wartet der erste Klick auf 13 MB. Nach jeder Analyse wird sofort
+  wieder ein Worker vorgewärmt.
+- **Wheels werden direkt entpackt statt über `micropip` installiert.** Sie
+  liegen ohnehin lokal; `micropip` würde nur einen Paketindex im Netz
+  suchen, den es in dieser Variante nicht geben soll.
+- **`tools/fetch_vendor.py`** holt Pyodide und die Wheels nach
+  `static/vendor/` (13,3 MB, nicht versioniert, reproduzierbar). Die
+  Pyodide-Version ist festgenagelt — ein stiller Versionssprung würde die
+  Analyse ändern, ohne dass am Code etwas passiert.
+- **Der URL-Upload (`/upload-url`) bleibt vorerst serverseitig.** Er lädt
+  eine fremde Datei herunter, was im Browser an CORS scheitert. In der
+  statischen Variante entfällt er — das ist beim Vercel-Deploy zu
+  entscheiden, nicht hier.
 
 ### Etappe 4 — Vercel-Deploy
 
@@ -426,15 +457,20 @@ Auch bei geparkter Challenge sind diese vier später teuer nachzurüsten:
 
 ## 9. Nächster Schritt
 
-Etappe 1 und 2 sind abgeschlossen: Der Analysekern läuft als reines Wheel im
-Browser, aus einem Puffer, ohne Threads, mit einem Speicherbedarf in der
-Größenordnung der Dateigröße — und liefert dort denselben Report wie unter
-CPython.
+Etappen 1 bis 3 sind abgeschlossen. Die Anwendung analysiert Excel-Dateien
+vollständig im Browser: Der Kern läuft als reines Wheel unter Pyodide, die
+Oberfläche zeigt denselben Fortschritt wie zuvor, der Report entsteht lokal
+— und **die Datei geht nirgendwohin.**
 
-**Als Nächstes Etappe 3**: Web Worker und Oberfläche. Der Kern ist fertig,
-was fehlt ist die Verpackung — Worker je Analyse, Fortschritts-Events per
-`postMessage` statt SSE, Report direkt in den DOM.
+**Als Nächstes Etappe 4**: Vercel-Deploy. Das ist jetzt der kleine Schritt,
+der es laut Abschnitt 3.1 sein sollte — es gibt nichts mehr zu hosten außer
+statischen Dateien. Zu klären ist dort:
 
-Der Go/No-Go-Spike, der hier ursprünglich stand, ist beantwortet:
-**Variante A trägt** — inzwischen nicht mehr als Messung an openpyxl allein,
-sondern am vollständigen Analysekern im echten Browser.
+- Die Seite wird derzeit von Flask ausgeliefert (`render_template_string`).
+  Für Vercel muss daraus statisches HTML werden.
+- Cache-Header für die unveränderlichen Pyodide-Dateien (Etappe 4.3) — im
+  Flask-Entwicklungsserver wird bei jedem Vorwärmen neu geladen.
+- Fonts von `rsms.me` und `jsdelivr` in `static/theme.css` selbst hosten
+  (Etappe 4.2). **Das sind aktuell die einzigen verbliebenen Fremdaufrufe.**
+- Was mit `/upload-url`, der LLM-Anbindung und den übrigen Flask-Routen
+  geschieht.

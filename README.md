@@ -23,8 +23,21 @@ Python-venvs sind **nicht portierbar** — auf jedem PC neu bauen.
 cd /c/Users/<you>/ExcelChecker
 python -m venv .venv
 source .venv/Scripts/activate
-pip install -e .
+pip install -e '.[web]'
+
+# Analyse-Umgebung für den Browser holen (~13 MB, einmalig)
+python tools/fetch_vendor.py
 ```
+
+Seit die Analyse **im Browser** läuft, braucht die Webapp Pyodide und die
+Wheels als lokale Dateien unter `excel_checker/static/vendor/`. Die sind
+bewusst nicht im Repository (13 MB) und werden von
+[`tools/fetch_vendor.py`](tools/fetch_vendor.py) geholt. Ohne diesen Schritt
+lädt die Startseite, aber die Prüfung meldet, dass die Analyse-Umgebung
+fehlt. `python tools/fetch_vendor.py --check` sagt, ob alles da ist.
+
+Das Extra `[web]` zieht Flask, requests und python-dotenv. Wer nur die CLI
+oder den Analysekern braucht, kommt mit `pip install -e .` und openpyxl aus.
 
 `.env` mit `CLAUDE_API_KEY`, `AZURE_ENDPOINT`, `CLAUDE_MODEL`, `APP_VERSION` anlegen
 (wird von [`excel_checker/__init__.py`](excel_checker/__init__.py) via `python-dotenv`
@@ -41,6 +54,14 @@ PYTHONIOENCODING=utf-8 python -m excel_checker.webapp
 excel-reifecheck datei.xlsx --html report.html --open --lang de
 ```
 
+**Die hochgeladene Datei verlässt den Browser nicht.** Die Prüfung läuft per
+WebAssembly lokal; der Server liefert nur die Seite und die statischen
+Dateien aus. Nachprüfbar mit
+[`bench/run_page_check.py`](bench/run_page_check.py) — das Skript fährt die
+Seite in Chromium und schlägt fehl, sobald irgendein Request an `/upload`,
+`/progress` oder `/report` geht. Hintergrund und Messwerte in
+[`docs/deployment/PLAN.md`](docs/deployment/PLAN.md).
+
 `PYTHONIOENCODING=utf-8` ist auf Windows nötig, damit das `⚡`-Emoji im Startup-Banner
 nicht an der cp1252-Konsole scheitert.
 
@@ -52,6 +73,9 @@ nicht an der cp1252-Konsole scheitert.
 - [`excel_checker/webapp.py`](excel_checker/webapp.py) — Flask-Routes, SSE-Stream, Template `UPLOAD_PAGE`
 - [`excel_checker/_upload_page.html`](excel_checker/_upload_page.html) — Sidecar-Template (wird beim Modul-Import gelesen)
 - [`excel_checker/_webapp_bytecode.pyc`](excel_checker/_webapp_bytecode.pyc) — Safety-Net-Backup, siehe unten
+- [`excel_checker/static/analysis_worker.js`](excel_checker/static/analysis_worker.js) — Web Worker, führt den Analysekern per Pyodide im Browser aus
+- [`excel_checker/static/browser_analysis.js`](excel_checker/static/browser_analysis.js) — Worker-Lebenszyklus, Vorwärmen, Laufzeitschätzung
+- [`tools/fetch_vendor.py`](tools/fetch_vendor.py) — holt Pyodide und die Wheels nach `static/vendor/`
 - [`excel_checker/report.py`](excel_checker/report.py) — HTML-Report-Generator
 - [`excel_checker/llm_analysis.py`](excel_checker/llm_analysis.py) — optionale Claude-API-Anbindung für narrative Deutung
 - [`excel_checker/i18n.py`](excel_checker/i18n.py) + [`excel_checker/locale/`](excel_checker/locale/) — DE/EN-Übersetzungen
