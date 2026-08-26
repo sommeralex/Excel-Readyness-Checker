@@ -1,0 +1,61 @@
+<!doctype html><meta charset="utf-8"><title>Pyodide Bench</title>
+<pre id="log">start…</pre>
+<script src="/pyodide/pyodide.js"></script>
+<script>
+const log = m => { document.getElementById('log').textContent += "\n" + m; console.log(m); };
+const heapMB = py => (py._module.HEAP8.length / 1048576).toFixed(0);
+window.RESULTS = []; window.DONE = false;
+
+async function main() {
+  const t0 = performance.now();
+  const py = await loadPyodide({ indexURL: "/pyodide/" });
+  log(`pyodide boot: ${((performance.now()-t0)/1000).toFixed(1)} s, heap ${heapMB(py)} MB`);
+
+  const tm = performance.now();
+  for (const w of ["et_xmlfile-2.0.0-py3-none-any.whl","openpyxl-3.1.5-py2.py3-none-any.whl"]) {
+    const wb = new Uint8Array(await (await fetch("/wheels/"+w)).arrayBuffer());
+    py.FS.writeFile("/tmp/"+w, wb);
+  }
+  py.runPython(`
+import zipfile, sys, os
+os.makedirs("/site", exist_ok=True)
+for w in ["et_xmlfile-2.0.0-py3-none-any.whl","openpyxl-3.1.5-py2.py3-none-any.whl"]:
+    with zipfile.ZipFile("/tmp/"+w) as z: z.extractall("/site")
+sys.path.insert(0, "/site")
+`);
+  log(`openpyxl install (Wheel entpackt): ${((performance.now()-tm)/1000).toFixed(1)} s, heap ${heapMB(py)} MB`);
+  log(py.runPython(`import openpyxl; f"openpyxl {openpyxl.__version__} laeuft in Pyodide"`));
+
+  for (const [name, ro] of [["wb_S.xlsx",false],["wb_S.xlsx",true],
+                            ["wb_M.xlsx",false],["wb_M.xlsx",true],
+                            ["wb_L.xlsx",true],["wb_L.xlsx",false]]) {
+    try {
+      const buf = new Uint8Array(await (await fetch("/"+name)).arrayBuffer());
+      py.FS.writeFile("/tmp/"+name, buf);
+      const before = performance.now(), h0 = heapMB(py);
+      const out = py.runPython(`
+import openpyxl, time, gc
+gc.collect()
+t=time.perf_counter()
+wb=openpyxl.load_workbook("/tmp/${name}", read_only=${ro?"True":"False"}, data_only=False)
+ws=wb[wb.sheetnames[0]]
+n=sum(1 for _ in ws.iter_rows(max_row=50000)) if ${ro?"True":"False"} else ws.max_row
+try: wb.close()
+except Exception: pass
+f"{time.perf_counter()-t:.1f}|{n}"
+`);
+      const [secs, rows] = out.split("|");
+      const line = `${name} read_only=${ro?"J":"N"}  ${(buf.length/1048576).toFixed(1)} MB  ${secs} s  heap ${h0}->${heapMB(py)} MB  rows=${rows}`;
+      log(line); window.RESULTS.push(line);
+      py.FS.unlink("/tmp/"+name);
+      py.runPython("import gc; gc.collect()");
+    } catch (e) {
+      const line = `${name} read_only=${ro?"J":"N"}  ABBRUCH: ${String(e).split("\n")[0].slice(0,140)}`;
+      log(line); window.RESULTS.push(line);
+    }
+  }
+  window.DONE = true;
+  log("FERTIG");
+}
+main().catch(e => { log("FATAL " + e); window.DONE = true; });
+</script>

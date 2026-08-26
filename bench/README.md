@@ -1,0 +1,78 @@
+# Benchmark-Harness — Speicher- und Laufzeitgrenzen
+
+Misst, wie viel Arbeitsspeicher und Zeit openpyxl und der Analysekern bei
+wachsenden Workbooks brauchen — in CPython und im echten Browser (Pyodide).
+Grundlage für die Auslieferungsentscheidung in `docs/deployment/PLAN.md`.
+
+## Ausführen
+
+```bash
+python -m venv .venv-bench && .venv-bench/bin/pip install -e . playwright
+
+# Testdateien erzeugen (nicht versioniert — sie sind groß)
+.venv-bench/bin/python bench/gen.py  20000 15 bench/wb_S.xlsx
+.venv-bench/bin/python bench/gen.py 100000 20 bench/wb_M.xlsx
+.venv-bench/bin/python bench/gen.py 300000 25 bench/wb_L.xlsx
+
+# CPython: load / load_ro / analyze
+for f in S M L; do for m in load load_ro analyze; do
+  .venv-bench/bin/python bench/bench.py $m bench/wb_$f.xlsx
+done; done
+
+# Browser: Pyodide von npm holen, lokal servieren, headless messen
+npm pack pyodide && mkdir -p srv/pyodide && tar xzf pyodide-*.tgz -C srv/pyodide --strip-components=1
+.venv-bench/bin/pip download openpyxl et_xmlfile -d srv/wheels --no-deps
+cp bench/bench.html bench/wb_*.xlsx srv/
+(cd srv && python -m http.server 8765 &)
+.venv-bench/bin/python bench/run_bench.py
+```
+
+`run_bench.py` sucht Chromium unter `/opt/pw-browsers/chromium-*/chrome-linux/chrome`;
+Pfad ggf. anpassen.
+
+## Ergebnisse (26.08.2026, Codestand 3d0b075)
+
+Testdateien: gemischte Typen (String-IDs, Ganzzahlen, Fließkomma, Enum-Text,
+Datum), ein Blatt.
+
+### CPython 3.11, openpyxl 3.1.5
+
+| Datei | Größe | Modus | Zeit | Peak-RSS |
+|---|---|---|---|---|
+| wb_S (20k × 15) | 1,8 MB | `load` | 3,3 s | **146 MB** |
+| wb_S | 1,8 MB | `load read_only` | 2,6 s | **26 MB** |
+| wb_S | 1,8 MB | `analyze` (voll) | 8,9 s | 157 MB |
+| wb_M (100k × 20) | 11,9 MB | `load` | 28,5 s | **849 MB** |
+| wb_M | 11,9 MB | `load read_only` | 10,6 s | **33 MB** |
+| wb_M | 11,9 MB | `analyze` (voll) | 56,2 s | 869 MB |
+| wb_L (300k × 25) | 44,4 MB | `load` | 105,4 s | **3134 MB** |
+| wb_L | 44,4 MB | `load read_only` | 22,6 s | **49 MB** |
+| wb_L | 44,4 MB | `analyze` (voll) | 134,9 s | 3146 MB |
+
+### Pyodide 314.0.6 in Chromium 1194 (headless)
+
+| Datei | Größe | Modus | Zeit | WASM-Heap |
+|---|---|---|---|---|
+| Boot Pyodide | — | — | 2,0 s | 30 MB |
+| openpyxl-Wheel entpacken | — | — | 0,1 s | +0 MB |
+| wb_S | 1,8 MB | `load` | 5,4 s | 30 → 108 MB |
+| wb_M | 11,9 MB | `load` | 33,7 s | 108 → 653 MB |
+| wb_L | 44,4 MB | `load` | 123,7 s | 653 → **2053 MB** |
+| wb_L | 44,4 MB | `load read_only` (frischer Heap) | 42,9 s | 30 → **43 MB** |
+| wb_M | 11,9 MB | `load read_only` | 20,7 s | 43 → 43 MB |
+
+## Was daraus folgt
+
+1. **`read_only` ist der entscheidende Hebel.** Ohne ihn wächst der Speicher
+   mit etwa dem **70-fachen der Dateigröße**; mit ihm bleibt er ungefähr bei
+   der **einfachen Dateigröße**. Bei wb_L: 3134 MB gegen 49 MB.
+2. **`read_only` ist heute nicht aktiv.** `_select_tier` setzt in allen drei
+   Tiers `read_only: False` (`engine.py:242`); der Kommentar in
+   `engine.py:359` behauptet das Gegenteil und ist veraltet.
+3. **openpyxl läuft unverändert unter Pyodide** — bestätigt, nicht vermutet.
+4. **Der Pyodide-Aufschlag ist klein**: Faktor 1,2 bis 1,6 gegenüber CPython,
+   nicht 3 bis 10.
+5. **Der WASM-Heap schrumpft nie.** Nach wb_L bleibt er bei 2 GB, auch nach
+   `gc.collect()`. Jede Analyse braucht deshalb einen **frischen Worker, der
+   danach beendet wird.**
+6. **Pyodide-Boot ist unkritisch**: 2,0 s, 14 MB entpackt, danach im Cache.
