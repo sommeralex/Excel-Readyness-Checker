@@ -162,6 +162,70 @@ def _count_cells_sampled(ws, real_rows: int, real_cols: int) -> tuple[int, int]:
 ProgressEvent = dict  # {"step": str, "detail": str, "pct": int, "status": "running"|"done"|"error"}
 
 
+# ── Quelle: Pfad oder Puffer ─────────────────────────────────────────
+
+def _buffer_size(buf) -> int:
+    """Größe eines file-like Objekts, ohne seinen Inhalt zu kopieren."""
+    pos = buf.tell()
+    size = buf.seek(0, os.SEEK_END)
+    buf.seek(pos)
+    return size
+
+
+def _resolve_source(source, filename: Optional[str] = None):
+    """Nimmt einen Pfad oder ein file-like Objekt entgegen.
+
+    Im Browser (Pyodide) gibt es keine Dateipfade — dort kommt der Inhalt
+    als ``BytesIO`` aus dem File-Input. Deshalb akzeptiert der Analysekern
+    beides und leitet Größe und Anzeigename je nach Quelle ab.
+
+    Rückgabe: ``(workbook_source, display_name, size_bytes)``. ``display_name``
+    landet in ``WorkbookReport.file_path`` und ist bei einem Puffer nur ein
+    Name, kein Pfad — nichts darf ihn zum Öffnen benutzen.
+    """
+    if isinstance(source, (str, os.PathLike)):
+        path = os.path.abspath(os.fspath(source))
+        if not os.path.exists(path):
+            raise FileNotFoundError(_("engine.file_not_found", path=path))
+        return path, (filename or path), os.path.getsize(path)
+
+    if not hasattr(source, "read"):
+        raise TypeError(_("engine.bad_source", type=type(source).__name__))
+
+    try:
+        size = _buffer_size(source)
+        source.seek(0)
+    except (AttributeError, OSError, ValueError) as exc:
+        raise TypeError(_("engine.unseekable_source")) from exc
+
+    name = filename or getattr(source, "name", None) or _("engine.unnamed_source")
+    return source, str(name), size
+
+
+# ── Regel-Timeout: braucht Threads, die es nicht überall gibt ────────
+
+_threads_ok: Optional[bool] = None
+
+
+def _threads_available() -> bool:
+    """Ob dieser Interpreter Threads starten kann.
+
+    Pyodide bringt das ``threading``-Modul mit, kann aber je nach Build
+    keinen Thread starten. Einmal ausprobieren ist verlässlicher als eine
+    Plattformabfrage — das Ergebnis wird gemerkt.
+    """
+    global _threads_ok
+    if _threads_ok is None:
+        try:
+            probe = threading.Thread(target=lambda: None)
+            probe.start()
+            probe.join()
+            _threads_ok = True
+        except (RuntimeError, OSError):
+            _threads_ok = False
+    return _threads_ok
+
+
 def _sheets_without_dimensions(wb) -> list:
     """Blätter, deren Größe openpyxl im read-only-Modus nicht kennt."""
     return [ws for ws in wb.worksheets
@@ -222,13 +286,18 @@ def _compute_db_readiness(stats: SheetStats, findings: list) -> int:
 
 
 def analyze(
-    file_path: str,
+    source,
     rules: Optional[List[type[BaseRule]]] = None,
+    filename: Optional[str] = None,
 ) -> WorkbookReport:
-    """Analysiert eine Excel-Datei und gibt einen vollständigen Report zurück."""
+    """Analysiert eine Excel-Datei und gibt einen vollständigen Report zurück.
+
+    ``source`` ist ein Dateipfad oder ein file-like Objekt (z. B. ``BytesIO``).
+    ``filename`` überschreibt den Anzeigenamen im Report.
+    """
     # Wrapper um analyze_with_progress, ignoriert Events
     report = None
-    for event_or_report in analyze_with_progress(file_path, rules):
+    for event_or_report in analyze_with_progress(source, rules, filename=filename):
         if isinstance(event_or_report, WorkbookReport):
             report = event_or_report
     return report
@@ -313,14 +382,17 @@ def _filter_rules_for_tier(
 
 
 def analyze_with_progress(
-    file_path: str,
+    source,
     rules: Optional[List[type[BaseRule]]] = None,
     rule_timeout_sec: int = 30,
     progress_callback: Optional[Callable[[dict], None]] = None,
+    filename: Optional[str] = None,
 ) -> Generator[ProgressEvent | WorkbookReport, None, None]:
     """Analysiert eine Excel-Datei und yielded Progress-Events.
 
-    Das letzte yield ist der fertige WorkbookReport.
+    ``source`` ist ein Dateipfad oder ein file-like Objekt (``BytesIO``) —
+    im Browser gibt es keine Pfade. ``filename`` überschreibt den
+    Anzeigenamen. Das letzte yield ist der fertige WorkbookReport.
     """
     if rules is None:
         rules = ALL_RULES
@@ -347,11 +419,9 @@ def analyze_with_progress(
             "current": current_step, "total": total_steps,
         }
 
-    file_path = os.path.abspath(file_path)
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(_("engine.file_not_found", path=file_path))
+    workbook_source, file_path, file_size_bytes = _resolve_source(source, filename)
 
-    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    file_size_mb = file_size_bytes / (1024 * 1024)
     size_str = f"{file_size_mb:.1f} MB" if file_size_mb >= 0.1 else f"{file_size_mb * 1024:.0f} KB"
 
     # Gestuftes Scan-Modell: siehe _select_tier für die Entscheidungslogik.
@@ -391,7 +461,7 @@ def analyze_with_progress(
 
     # === Schritt 1: Datei laden ===
     # load_kwargs ist vom Tier bestimmt: read_only=True ab Tier 2.
-    wb = openpyxl.load_workbook(file_path, **load_kwargs)
+    wb = openpyxl.load_workbook(workbook_source, **load_kwargs)
     current_step = 1
 
     # Im read-only-Modus fehlen Blattmaße, wenn die Datei kein
@@ -618,6 +688,9 @@ def analyze_with_progress(
     # === Schritt 3-N: Regeln ausführen (nur im Normalmodus) ===
     for rule_idx, rule_cls in enumerate(active_rules):
         rule = rule_cls()
+        # Bei einem Puffer gibt es keinen Pfad, den eine Regel selbst
+        # vermessen könnte — die Größe kennt nur der Engine.
+        rule.file_size_bytes = file_size_bytes
         yield progress(
             _( "engine.rule_checking", name=rule.rule_name),
             _( "engine.rule_detail", idx=rule_idx + 1, count=len(active_rules), rule_id=rule.rule_id)
@@ -649,10 +722,19 @@ def analyze_with_progress(
                 # Traceback JETZT einfangen — format_exc() außerhalb des except-
                 # Blocks liefert "NoneType: None\n".
                 error_tb = traceback.format_exc()
-        thread = threading.Thread(target=run_rule)
-        thread.start()
-        thread.join(timeout=rule_timeout_sec)
-        if thread.is_alive():
+        if _threads_available():
+            thread = threading.Thread(target=run_rule)
+            thread.start()
+            thread.join(timeout=rule_timeout_sec)
+            timed_out = thread.is_alive()
+        else:
+            # Ohne Threads (Pyodide) gibt es keinen Timeout-Wächter. Die Regel
+            # läuft dann bis zum Ende durch — die Regel-Schranken (max_row,
+            # max_col, Sampling) begrenzen den Aufwand ohnehin.
+            run_rule()
+            timed_out = False
+
+        if timed_out:
             # Timeout: Thread läuft noch. Error-Event darf den Step-Counter
             # NICHT weiter erhöhen — sonst erreicht pct 100 % bevor die letzten
             # Regeln durch sind und die UI zeigt fälschlich "fertig".

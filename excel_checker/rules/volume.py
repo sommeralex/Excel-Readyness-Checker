@@ -151,10 +151,14 @@ class FileSizeRule(BaseRule):
 
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
-        try:
-            size_bytes = os.path.getsize(file_path)
-        except OSError:
-            return findings
+        # Der Engine reicht die Größe durch; bei einem Puffer gibt es keinen
+        # Pfad, den os.path.getsize vermessen könnte.
+        size_bytes = getattr(self, "file_size_bytes", None)
+        if size_bytes is None:
+            try:
+                size_bytes = os.path.getsize(file_path)
+            except (OSError, TypeError, ValueError):
+                return findings
 
         size_mb = size_bytes / (1024 * 1024)
 

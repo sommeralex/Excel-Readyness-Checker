@@ -1,6 +1,6 @@
 # Ausliefern statt Hosten — Reifecheck als Web-App und als Download
 
-Status: v3 (Etappe 1 umgesetzt) · Basis: Codestand `4f37c3d` · Entscheidungsvorlage
+Status: v4 (Etappe 1 und 2 umgesetzt) · Basis: Codestand `c4e4939` · Entscheidungsvorlage
 
 ---
 
@@ -201,9 +201,9 @@ nicht nur möglich, sondern die ideale Plattform:
 |---|---|
 | Pyodide-Erstladung | **Entschärft.** 14 MB entpackt, Boot 2,0 s, danach im Cache |
 | Langsamer als CPython | **Entschärft.** Gemessen Faktor 1,2–1,6, nicht 3–10 |
-| Browser-Speichergrenze ~2 GB | **Offen bis Etappe 1.** Ohne `read_only` reißt eine 30-MB-Datei die Grenze; mit `read_only` ist sie kein Thema mehr |
+| Browser-Speichergrenze ~2 GB | **Erledigt.** Gemessen in Etappe 2.4: 44-MB-Workbook braucht im Browser 106 MB Heap (davon 44 MB der Puffer selbst) |
 | Heap wächst über die Sitzung | **Neu erkannt.** WASM-Heap schrumpft nie → frischer Worker je Analyse, danach `terminate()` |
-| Analysedauer bei großen Dateien | Real: 40 s bis über 2 Minuten. Im Browser tolerierbar (kein Timeout, Fortschrittsanzeige da), erfordert aber ehrliche Zeitangabe in der UI |
+| Analysedauer bei großen Dateien | **Bestätigt.** 44-MB-Workbook: 166 s im Browser. Tolerierbar (kein Timeout, Fortschrittsanzeige da), erfordert aber ehrliche Zeitangabe in der UI — siehe Etappe 3.5 |
 | Alte oder gesperrte Firmenbrowser | Hinweis plus Download-Variante (Abschnitt 5) |
 
 
@@ -299,17 +299,58 @@ volle Durchläufe (Maße ermitteln, dann Blattstatistik). Der Statistik-Lauf
 könnte die Maße gleich mitliefern — spart je Blatt einen Durchlauf, erfordert
 aber einen Umbau der Phantom-Erkennung in `analyze_with_progress`.
 
-### Etappe 2 — Analysekern browserfähig
+### Etappe 2 — Analysekern browserfähig ✅ erledigt
 
-| Schritt | Inhalt |
-|---|---|
-| 2.1 | `analyze()` und `analyze_with_progress()` akzeptieren ein file-like Objekt statt nur eines Pfads (`engine.py:316–320`, `360`); Dateigröße aus der Puffergröße |
-| 2.2 | Regel-Timeout: Fallback ohne Threads, wenn `threading.Thread` nicht verfügbar ist (`engine.py:606`) |
-| 2.3 | `excel_checker` als reines Wheel bauen — ohne `flask`, `requests`, `dotenv` als harte Abhängigkeit (Extras statt Core-Dependencies in `pyproject.toml`) |
-| 2.4 | Wheel in Pyodide laden und `analyze_with_progress` vollständig durchlaufen lassen |
+| Schritt | Inhalt | Stand |
+|---|---|---|
+| 2.1 | `analyze()` und `analyze_with_progress()` akzeptieren ein file-like Objekt statt nur eines Pfads; Dateigröße aus der Puffergröße | ✅ erledigt, `engine._resolve_source` |
+| 2.2 | Regel-Timeout: Fallback ohne Threads | ✅ erledigt, `engine._threads_available` — Pyodide meldet tatsächlich `False`, der Fallback greift also im Echtbetrieb |
+| 2.3 | `excel_checker` als reines Wheel — `flask`, `requests`, `dotenv` als Extras statt Core-Dependencies | ✅ erledigt, Extra `web` |
+| 2.4 | Wheel in Pyodide laden und `analyze_with_progress` vollständig durchlaufen lassen | ✅ erledigt, Harness in `bench/wasm_check.html` + `bench/run_wasm_check.py` |
 
-**Abnahme:** Vollständiger HTML-Report aus `test_messy.xlsx`, erzeugt im
-Browser, inhaltsgleich zum CPython-Report.
+**Abnahme erfüllt:** Vollständiger HTML-Report aus `test_messy.xlsx` und
+`test_pii.xlsx`, erzeugt im Browser aus einem `BytesIO`, **byte-identisch**
+zum CPython-Report (nur die beiden Zeitstempel im Fußtext unterscheiden sich,
+die kann es gar nicht gleich geben). Pyodide-Boot 0,6–0,8 s, Wheels entpacken
+unter 0,1 s.
+
+**Zusätzlich am großen Workbook gemessen** — der Fall, um den es beim
+Speicher überhaupt ging:
+
+| wb_L (44,4 MB, 300k × 25) | Zeit | Speicher | Ergebnis |
+|---|---|---|---|
+| CPython, aus `BytesIO` | 108,9 s | 102 MB Peak-RSS | — |
+| Pyodide im Browser, aus `BytesIO` | 165,6 s | 106 MB WASM-Heap | **identisch** |
+
+Faktor 1,5 bei der Zeit, gleicher Speicher — beides deckt sich mit den
+Schätzungen aus Abschnitt 1. Der Puffer selbst macht 44 MB davon aus; die
+Analyse kostet also auch im Browser nur rund 60 MB. Der WASM-Heap bleibt
+damit bei etwa **5 %** dessen, was der Browser hergibt.
+
+#### Was der Browser-Lauf ans Licht gebracht hat
+
+Der erste Durchlauf war **nicht** identisch: dem Browser-Report fehlten
+12 KB. Drei Ursachen, alle drei echte Fehler, alle drei auch ohne Browser
+relevant:
+
+1. **Ein ganzer Report-Block verschwand stillschweigend.** `report.py` bettet
+   den Kontext für die LLM-Analyse als JSON ein und importiert dafür aus
+   `llm_analysis.py` — das wiederum `requests` auf Modulebene lud. Ohne
+   `requests` (Browser, oder Installation ohne `web`-Extra) schluckte ein
+   `except Exception: pass` den ImportError, und der Block fehlte
+   kommentarlos. `requests` wird jetzt erst beim Netzwerkzugriff geladen, und
+   der `except`-Zweig meldet sich, statt zu schweigen.
+2. **Die Report-Anker waren Speicheradressen.** `id="finding-STR-006-4474594496"`
+   kam aus `id(f)`. Zwei Analysen derselben Datei ergaben verschiedene
+   HTML-Dateien, und ein kopierter Deep-Link zeigte im nächsten Report ins
+   Leere. Jetzt aus dem Inhalt abgeleitet.
+3. **Die Reihenfolge verbundener Zellbereiche war zufällig.** `ws.merged_cells.ranges`
+   ist ein Set; „Bereiche: A1:D1, A2:D2" wurde mal so, mal andersherum
+   ausgegeben. Jetzt sortiert.
+
+Ergebnis über die Browser-Frage hinaus: **derselbe Input erzeugt jetzt
+denselben Report.** Vorher nicht — was jeden Vorher-Nachher-Vergleich und
+jeden geteilten Deep-Link unzuverlässig machte.
 
 ### Etappe 3 — Worker und Oberfläche
 
@@ -385,11 +426,15 @@ Auch bei geparkter Challenge sind diese vier später teuer nachzurüsten:
 
 ## 9. Nächster Schritt
 
-Etappe 1 ist abgeschlossen (Messwerte oben). **Als Nächstes Etappe 2.1**:
-`analyze()` und `analyze_with_progress()` ein file-like Objekt akzeptieren
-lassen statt nur einen Pfad — die Voraussetzung dafür, dass die Analyse
-überhaupt im Browser laufen kann, wo es keine Dateipfade gibt.
+Etappe 1 und 2 sind abgeschlossen: Der Analysekern läuft als reines Wheel im
+Browser, aus einem Puffer, ohne Threads, mit einem Speicherbedarf in der
+Größenordnung der Dateigröße — und liefert dort denselben Report wie unter
+CPython.
 
-Der Go/No-Go-Spike, der hier ursprünglich stand, ist durch die Messungen in
-Abschnitt 1 beantwortet: **Variante A ist tragfähig.** Der Speicherengpass,
-der als einziges echtes Risiko übrig war, ist mit Etappe 1 beseitigt.
+**Als Nächstes Etappe 3**: Web Worker und Oberfläche. Der Kern ist fertig,
+was fehlt ist die Verpackung — Worker je Analyse, Fortschritts-Events per
+`postMessage` statt SSE, Report direkt in den DOM.
+
+Der Go/No-Go-Spike, der hier ursprünglich stand, ist beantwortet:
+**Variante A trägt** — inzwischen nicht mehr als Messung an openpyxl allein,
+sondern am vollständigen Analysekern im echten Browser.

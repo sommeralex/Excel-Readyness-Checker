@@ -53,7 +53,13 @@ class MergedCellsRule(BaseRule):
     def check(self, workbook: openpyxl.Workbook, file_path: str, progress_callback=None) -> List[Finding]:
         findings = []
         for ws in workbook.worksheets:
-            merged = list(ws.merged_cells.ranges)
+            # ``ranges`` ist ein Set — ohne Sortierung wechselt die
+            # Reihenfolge zwischen Läufen und der Report ist nicht
+            # reproduzierbar. Sortiert wird nach Zeile, dann Spalte.
+            merged = sorted(
+                ws.merged_cells.ranges,
+                key=lambda r: (r.min_row, r.min_col, r.max_row, r.max_col),
+            )
             if merged:
                 examples = [str(r) for r in merged[:5]]
                 extra = f" (und {len(merged) - 5} weitere)" if len(merged) > 5 else ""

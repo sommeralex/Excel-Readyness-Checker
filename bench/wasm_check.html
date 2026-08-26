@@ -1,0 +1,95 @@
+<!doctype html><meta charset="utf-8"><title>Analysekern in Pyodide</title>
+<pre id="log">start…</pre>
+<script src="/pyodide/pyodide.js"></script>
+<script>
+// Abnahme fuer Etappe 2.4: Laeuft der Analysekern als reines Wheel unter
+// Pyodide, aus einem BytesIO, ohne Threads und ohne Dateipfad — und kommt
+// derselbe Report heraus wie unter CPython?
+const log = m => { document.getElementById('log').textContent += "\n" + m; console.log(m); };
+const heapMB = py => (py._module.HEAP8.length / 1048576).toFixed(0);
+const WHEELS = [
+  "et_xmlfile-2.0.0-py3-none-any.whl",
+  "openpyxl-3.1.5-py2.py3-none-any.whl",
+  "excel_reifecheck-0.1.0-py3-none-any.whl",
+];
+window.RESULT = null; window.DONE = false;
+
+async function main() {
+  const t0 = performance.now();
+  const py = await loadPyodide({ indexURL: "/pyodide/" });
+  log(`pyodide boot: ${((performance.now()-t0)/1000).toFixed(1)} s, heap ${heapMB(py)} MB`);
+
+  const tw = performance.now();
+  for (const w of WHEELS) {
+    const bytes = new Uint8Array(await (await fetch("/wheels/" + w)).arrayBuffer());
+    py.FS.writeFile("/tmp/" + w, bytes);
+  }
+  py.runPython(`
+import zipfile, sys, os
+os.makedirs("/site", exist_ok=True)
+for w in ${JSON.stringify(WHEELS)}:
+    with zipfile.ZipFile("/tmp/" + w) as z:
+        z.extractall("/site")
+sys.path.insert(0, "/site")
+`);
+  log(`wheels entpackt: ${((performance.now()-tw)/1000).toFixed(1)} s, heap ${heapMB(py)} MB`);
+
+  // Threads: engine._threads_available() muss das selbst herausfinden.
+  log(py.runPython(`
+import excel_checker.engine as eng
+f"threads verfuegbar: {eng._threads_available()}"
+`));
+
+  const file = new URLSearchParams(location.search).get("file") || "test_messy.xlsx";
+  const buf = new Uint8Array(await (await fetch("/" + file)).arrayBuffer());
+  py.FS.writeFile("/tmp/input.xlsx", buf);
+
+  const ta = performance.now();
+  const out = py.runPython(`
+import io, json
+from dataclasses import asdict
+from excel_checker.engine import analyze_with_progress
+from excel_checker.models import WorkbookReport
+from excel_checker.report import generate_html
+
+# So kommt die Datei im Browser an: als Puffer, ohne Pfad.
+buf = io.BytesIO(open("/tmp/input.xlsx", "rb").read())
+
+events, report = [], None
+for item in analyze_with_progress(buf, filename=${JSON.stringify(file)}):
+    if isinstance(item, WorkbookReport):
+        report = item
+    else:
+        events.append(item.get("step", ""))
+
+html = generate_html(report)
+payload = {
+    "score": report.health_score,
+    "findings": sorted(
+        f"{f.rule_id}|{f.severity.value}|{f.sheet}|{f.message}" for f in report.findings
+    ),
+    "stats": sorted([asdict(s) for s in report.sheet_stats], key=lambda d: d["name"]),
+    "profiles": sorted(
+        [asdict(c) for c in report.column_profiles],
+        key=lambda d: (d["sheet"], d["column_letter"]),
+    ),
+    "recs": sorted(x.title for x in report.recommendations),
+    "events": len(events),
+}
+json.dumps({"payload": payload, "html": html}, ensure_ascii=False, sort_keys=True, default=str)
+`);
+  const secs = ((performance.now()-ta)/1000).toFixed(1);
+  const parsed = JSON.parse(out);
+  log(`analyse ${file}: ${secs} s, heap ${heapMB(py)} MB`);
+  log(`  score=${parsed.payload.score} findings=${parsed.payload.findings.length} `
+      + `events=${parsed.payload.events} html=${parsed.html.length}`);
+  window.RESULT = out;
+  window.DONE = true;
+  log("FERTIG");
+}
+main().catch(e => {
+  log("FATAL " + e);
+  window.RESULT = JSON.stringify({error: String(e)});
+  window.DONE = true;
+});
+</script>

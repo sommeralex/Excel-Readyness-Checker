@@ -20,8 +20,10 @@ class BaseRule(ABC):
     auszuwählen und ggf. Sampling zu aktivieren.
 
     - ``needs_styles``: Greift auf ``cell.fill``/``cell.font``/``cell.comment``
-      oder ``ws.conditional_formatting``/``ws.data_validations`` zu. Solche
-      Regeln können NICHT im read-only-Modus von openpyxl laufen.
+      oder auf Blatt-Eigenschaften wie ``ws.merged_cells``, ``ws.protection``,
+      ``ws.conditional_formatting``, ``ws.data_validations`` zu. Solche Regeln
+      können NICHT im read-only-Modus von openpyxl laufen — die Attribute
+      existieren dort nicht und der Zugriff wirft ``AttributeError``.
     - ``scales_with_cells``: Laufzeit wächst linear mit Zellenzahl (iteriert
       alle Zellen). Kandidat für Sampling.
     - ``supports_sampling``: Regel darf mit einer ``SampleMode``-Instanz
@@ -35,6 +37,11 @@ class BaseRule(ABC):
     needs_styles: bool = False
     scales_with_cells: bool = False
     supports_sampling: bool = False
+
+    # Vom Engine vor jedem ``check`` gesetzt. Nötig, weil ``file_path`` bei
+    # einer Analyse aus dem Speicher (Browser) nur ein Anzeigename ist und
+    # sich nicht vermessen lässt.
+    file_size_bytes: Optional[int] = None
 
     @property
     @abstractmethod

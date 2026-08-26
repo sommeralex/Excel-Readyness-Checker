@@ -3,6 +3,8 @@ __pycache__/
 !excel_checker/_webapp_bytecode.pyc
 *.pyo
 *.egg-info/
+build/
+dist/
 .venv/
 venv/
 .env

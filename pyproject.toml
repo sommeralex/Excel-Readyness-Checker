@@ -3,8 +3,16 @@ name = "excel-reifecheck"
 version = "0.1.0"
 description = "Datenreife-Check für Excel – der erste Schritt Richtung AI-Readiness"
 requires-python = ">=3.10"
+# Der Analysekern (engine, rules, report) braucht nur openpyxl — beides
+# reines Python und damit unter Pyodide im Browser lauffähig. Alles, was
+# einen Server oder Netzwerk voraussetzt, liegt in Extras.
 dependencies = [
     "openpyxl>=3.1.0",
+]
+
+[project.optional-dependencies]
+# Web-Oberfläche (webapp.py) und LLM-Anbindung (llm_analysis.py)
+web = [
     "flask>=3.0",
     "python-dotenv>=1.0",
     "requests>=2.31",

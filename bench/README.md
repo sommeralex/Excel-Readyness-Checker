@@ -27,6 +27,27 @@ cp bench/bench.html bench/wb_*.xlsx srv/
 .venv-bench/bin/python bench/run_bench.py
 ```
 
+## Analysekern im Browser prüfen
+
+`wasm_check.html` lädt das gebaute Wheel in Pyodide, analysiert eine Datei
+aus einem `BytesIO` und gibt den fertigen Report zurück; `run_wasm_check.py`
+rechnet dieselbe Analyse unter CPython und vergleicht beides Feld für Feld.
+
+```bash
+# Wheel bauen und mit den Abhängigkeiten bereitstellen
+.venv/bin/python -m build --wheel --outdir dist
+mkdir -p srv/wheels && cp dist/*.whl srv/wheels/
+.venv/bin/pip download openpyxl et_xmlfile -d srv/wheels --no-deps
+cp bench/wasm_check.html test_messy.xlsx test_pii.xlsx srv/
+
+(cd srv && python -m http.server 8765 &)
+.venv/bin/python bench/run_wasm_check.py http://127.0.0.1:8765 test_messy.xlsx
+```
+
+Verglichen werden Score, Findings, Sheet-Statistik, Column-Profiles,
+Empfehlungen und der Report selbst. Die beiden Zeitstempel im Fußtext werden
+vor dem Vergleich herausgerechnet — alles andere muss übereinstimmen.
+
 `run_bench.py` sucht Chromium unter `/opt/pw-browsers/chromium-*/chrome-linux/chrome`;
 Pfad ggf. anpassen.
 
@@ -87,3 +108,20 @@ Datum), ein Blatt.
    `gc.collect()`. Jede Analyse braucht deshalb einen **frischen Worker, der
    danach beendet wird.**
 6. **Pyodide-Boot ist unkritisch**: 2,0 s, 14 MB entpackt, danach im Cache.
+
+## Etappe 2.4 — Analysekern im Browser (26.08.2026, Codestand c4e4939)
+
+Gemessen mit `run_wasm_check.py`, Analyse jeweils aus einem `BytesIO`:
+
+| Datei | CPython | Pyodide | Speicher CPython | Speicher Pyodide | Report |
+|---|---|---|---|---|---|
+| test_messy.xlsx (11 KB) | < 1 s | 0,1 s | — | 36 MB Heap | identisch |
+| test_pii.xlsx (11 KB) | < 1 s | 0,1 s | — | 36 MB Heap | identisch |
+| wb_L.xlsx (44,4 MB) | 108,9 s | 165,6 s | 102 MB RSS | 106 MB Heap | identisch |
+
+„identisch" heißt: Score, Findings, Sheet-Statistik, Column-Profiles,
+Empfehlungen und der Report-HTML stimmen überein — Letzterer nach Abzug der
+beiden Zeitstempel im Fußtext.
+
+Nebenbefund: Pyodide meldet `threads verfuegbar: False`. Der Timeout-Wächter
+für Regeln fällt dort also tatsächlich auf den threadlosen Pfad zurück.

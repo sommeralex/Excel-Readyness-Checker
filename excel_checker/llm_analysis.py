@@ -8,9 +8,26 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-import requests
-
 from excel_checker.models import WorkbookReport
+
+_REQUESTS_MISSING = (
+    "Das Paket 'requests' fehlt. Es gehört zum Extra 'web': "
+    "pip install 'excel-reifecheck[web]'"
+)
+
+
+def _import_requests():
+    """Lädt ``requests`` erst dann, wenn wirklich eine Anfrage ansteht.
+
+    ``extract_context`` weiter unten ist reine Datenaufbereitung und wird von
+    ``report.py`` bei JEDEM Report aufgerufen — auch dort, wo es kein
+    ``requests`` gibt: im Browser unter Pyodide und bei einer Installation
+    ohne das ``web``-Extra. Ein Import auf Modulebene liess den
+    Kontext-Block im Report dort stillschweigend verschwinden.
+    """
+    import requests  # noqa: PLC0415 – bewusst verzögert
+
+    return requests
 
 
 @dataclass
@@ -106,6 +123,11 @@ def test_api_key(api_key: str, endpoint: str = "", model: str = "claude-sonnet-4
 
     if not endpoint:
         return False, "Kein Endpoint angegeben. Bitte die Azure AI Endpoint-URL konfigurieren."
+
+    try:
+        requests = _import_requests()
+    except ImportError:
+        return False, _REQUESTS_MISSING
 
     try:
         url, headers = _get_api_config(api_key, endpoint)
@@ -403,6 +425,7 @@ def analyze_with_llm(
         context = extract_context(report_or_context)
     prompt = _build_prompt(context)
 
+    requests = _import_requests()
     url, headers = _get_api_config(api_key, endpoint)
     payload = {
         "model": model,

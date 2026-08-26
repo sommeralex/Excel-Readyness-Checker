@@ -3,7 +3,14 @@
 import os as _os
 from datetime import datetime as _dt
 from pathlib import Path as _Path
-from dotenv import load_dotenv as _load_dotenv
+try:
+    from dotenv import load_dotenv as _load_dotenv
+except ImportError:  # noqa: BLE001 - dotenv ist ein Extra
+    # python-dotenv gehört zum ``web``-Extra. Der Analysekern soll sich auch
+    # dort importieren lassen, wo nur openpyxl verfügbar ist — im Browser
+    # (Pyodide) gibt es weder .env-Dateien noch das Paket.
+    def _load_dotenv(*_args, **_kwargs) -> bool:
+        return False
 
 _load_dotenv()
 

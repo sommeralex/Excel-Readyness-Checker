@@ -9,7 +9,9 @@ from collections import defaultdict
 from datetime import datetime
 from typing import List
 
+import hashlib as _hashlib
 import json as _json
+import sys as _sys
 
 from excel_checker.models import (
     Category, ColumnProfile, Finding, Recommendation, RecommendationType,
@@ -539,11 +541,30 @@ def generate_html(report: WorkbookReport) -> str:
         ctx = extract_context(report)
         ctx_json = _json.dumps(ctx, ensure_ascii=False)
         parts.append(f'<script type="application/json" id="report-context">{ctx_json}</script>')
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - Report darf daran nicht scheitern
+        # Nicht stillschweigend übergehen: Ein verschluckter ImportError hat
+        # diesen Block im Browser-Build unbemerkt verschwinden lassen.
+        print(f"[WARN] Report-Kontext konnte nicht eingebettet werden: {exc}",
+              file=_sys.stderr)
 
     parts.append(_html_footer())
     return "\n".join(parts)
+
+
+def _finding_anchor(f) -> str:
+    """Stabile DOM-ID für ein Finding.
+
+    Hier stand ``id(f)`` — die Speicheradresse des Objekts. Die ist bei
+    jedem Lauf eine andere, damit auch die Anker im Report: zwei Analysen
+    derselben Datei ergaben unterschiedliche HTML-Dateien, und ein
+    kopierter Deep-Link zeigte im nächsten Report ins Leere. Jetzt wird die
+    ID aus dem Inhalt abgeleitet und ist damit reproduzierbar.
+    """
+    raw = "|".join(
+        str(x) for x in (f.rule_id, f.sheet, f.cell, f.message, f.detail, f.suggestion)
+    )
+    digest = _hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
+    return f"finding-{_esc(f.rule_id)}-{digest}"
 
 
 def _html_head(filename: str, now: str) -> str:
@@ -1716,7 +1737,7 @@ def _render_finding_card(f: Finding) -> str:
         )
 
     return (
-        f'<details class="finding-card" data-severity="{sev.value}" data-rule-id="{_esc(f.rule_id)}" id="finding-{_esc(f.rule_id)}-{id(f)}">\n'
+        f'<details class="finding-card" data-severity="{sev.value}" data-rule-id="{_esc(f.rule_id)}" id="{_finding_anchor(f)}">\n'
         f'  <summary class="finding-summary">'
         f'<span class="{sev_cls}">{sev_icon} {_esc(sev_label)}</span>'
         f'<span>{_esc(title)}</span>'
@@ -1777,7 +1798,7 @@ def _html_top_actions(findings: list, limit: int = 3) -> str:
         if impact <= 0:
             continue
         title = _humanize(f.rule_id, f.message)
-        target_id = f'finding-{_esc(f.rule_id)}-{id(f)}'
+        target_id = _finding_anchor(f)
         teaser = f"Fix → +{impact} Punkte Datenqualität" if impact > 0 else "Kein direkter Score-Impact"
         cards.append(
             f'<div class="top-action-card" data-severity="{f.severity.value}">'
