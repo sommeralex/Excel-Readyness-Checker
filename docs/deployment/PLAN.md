@@ -1,6 +1,6 @@
 # Ausliefern statt Hosten — Reifecheck als Web-App und als Download
 
-Status: Entwurf v1 · Basis: Codestand `06a12c0` · Entscheidungsvorlage
+Status: Entwurf v2 (Messungen ergänzt) · Basis: Codestand `bb1121f` · Entscheidungsvorlage
 
 ---
 
@@ -16,7 +16,64 @@ mit den „polierten Excels".
 
 ---
 
-## 1. Warum die polierten Excels kein Anreizproblem sind, sondern ein Vertrauensproblem
+## 1. Gemessene Grenzen
+
+Die Frage „welche Limits existieren da eigentlich" ist am 26.08.2026 gemessen
+worden, nicht geschätzt. Harness und Rohdaten liegen in
+[`bench/`](../../bench/README.md) und lassen sich jederzeit neu rechnen.
+
+### 1.1 Die harte Formatgrenze
+
+Das XLSX-Format selbst deckelt bei **1.048.576 Zeilen × 16.384 Spalten je
+Blatt**. Größer kann eine Excel-Datei gar nicht sein. Alles darunter muss das
+Werkzeug schaffen.
+
+### 1.2 Der einzige Wert, auf den es ankommt
+
+| Lademodus | Speicherbedarf | Praktische Obergrenze im Browser (~2 GB) |
+|---|---|---|
+| `read_only=False` — **heutiger Stand** | ≈ **70 × Dateigröße** | **~25–30 MB Datei** |
+| `read_only=True` | ≈ **1 × Dateigröße** | jenseits jeder realen Excel-Datei |
+
+Belege: 44,4-MB-Workbook (300k Zeilen × 25 Spalten) in CPython — **3134 MB**
+Peak-RSS normal gegen **49 MB** mit `read_only`. Im Browser dasselbe Bild:
+**2053 MB** WASM-Heap normal gegen **43 MB** mit `read_only`.
+
+### 1.3 Drei Befunde, die den Plan bestimmen
+
+1. **`read_only` ist heute nicht aktiv.** `_select_tier` setzt in allen drei
+   Tiers `read_only: False` (`engine.py:242`, der Docstring sagt es
+   ausdrücklich); der Kommentar in `engine.py:359` behauptet das Gegenteil und
+   ist veraltet. **Das ist die höchstwirksame Einzeländerung im ganzen
+   Projekt** — sie nützt der Browser-, der Server- und der Desktop-Variante
+   gleichermaßen. Voraussetzung: 21 Zugriffe über `ws.cell()` in vier
+   Regelmodulen müssen auf `iter_rows()` umgestellt werden;
+   `rules/_sampling.py` hat das Muster bereits.
+2. **Der Pyodide-Aufschlag ist klein.** Gemessen Faktor **1,2 bis 1,6**
+   gegenüber CPython — nicht 3 bis 10, wie in der ersten Fassung dieses
+   Dokuments geschätzt. Boot 2,0 s, 14 MB entpackt, danach im Browser-Cache.
+   openpyxl läuft dort unverändert.
+3. **Der WASM-Heap schrumpft nie.** Nach einer großen Datei bleibt er auf
+   seinem Höchststand, auch nach `gc.collect()`. Jede Analyse braucht deshalb
+   einen **frischen Worker, der danach beendet wird** — sonst summiert sich der
+   Verbrauch über die Sitzung bis zum Absturz.
+
+### 1.4 Laufzeit
+
+| Datei | CPython | Pyodide |
+|---|---|---|
+| 1,8 MB | 3,3 s | 5,4 s |
+| 11,9 MB | 28,5 s | 33,7 s |
+| 44,4 MB (normal) | 105,4 s | 123,7 s |
+| 44,4 MB (`read_only`) | 22,6 s | 42,9 s |
+
+Minutenlange Analysen sind also real. Im Browser ist das unproblematisch —
+kein Timeout, Fortschrittsanzeige vorhanden. In einer Serverless-Funktion ist
+es ein Abbruch.
+
+---
+
+## 2. Warum die polierten Excels kein Anreizproblem sind, sondern ein Vertrauensproblem
 
 Der Einwand aus der Challenge-Diskussion war: Leute laden ihre saubersten
 Dateien hoch. Der Grund dafür ist nicht Wettbewerbslogik — der Grund ist, dass
@@ -32,7 +89,7 @@ Dieselbe Entscheidung, die das Vercel-Problem löst, löst also auch dieses.
 
 ---
 
-## 2. Realitätscheck: Die App läuft so nicht auf Vercel
+## 3. Realitätscheck: Die App läuft so nicht auf Vercel
 
 Vier harte Blocker im aktuellen Code:
 
@@ -46,7 +103,7 @@ Vier harte Blocker im aktuellen Code:
 *Die konkreten Vercel-Limits vor der Umsetzung nachprüfen — sie ändern sich.
 Blocker 1 bis 3 sind davon unabhängig strukturell.*
 
-### 2.1 Zur Klarstellung: Vercel ja, Flask-auf-Vercel nein
+### 3.1 Zur Klarstellung: Vercel ja, Flask-auf-Vercel nein
 
 Die Empfehlung lautet **Vercel**. Das „nicht Vercel" in Abschnitt 5 bezieht
 sich ausschließlich auf die Brückenvariante, bei der die Flask-App unverändert
@@ -56,9 +113,9 @@ bleibt. Zwei verschiedene Dinge:
 |---|---|---|
 | **A — statische App, Analyse im Browser** | **Vercel** | **Empfehlung.** Genau das, wofür Vercel gebaut ist |
 | B — Flask unverändert, Server nötig | Container (Fly, Hetzner, Railway) | Brücke, wenn es diese Woche live sein muss |
-| C — Flask serverless-tauglich umgebaut | Vercel | Möglich, aber teuer — siehe 2.2 |
+| C — Flask serverless-tauglich umgebaut | Vercel | Möglich, aber teuer — siehe 3.2 |
 
-### 2.2 Warum die Blocker strukturell sind und nicht konfigurierbar
+### 3.2 Warum die Blocker strukturell sind und nicht konfigurierbar
 
 Vercels Modell ist **zustandslose, kurzlebige Funktionsaufrufe hinter einem
 CDN**. Die Flask-App setzt **einen langlebigen Prozess mit gemeinsamem
@@ -81,10 +138,10 @@ eine Einstellung:
 Dazu das Body-Limit (Blocker 1). Für das gibt es zwar einen Standard-Workaround
 — der Client lädt direkt in einen Blob-Store, die Funktion liest von dort —
 aber **dieser Workaround bedeutet, dass die Datei gespeichert wird.** Genau das
-zerstört die Vertrauensaussage aus Abschnitt 1 und damit den Zugang zu den
+zerstört die Vertrauensaussage aus Abschnitt 2 und damit den Zugang zu den
 tagtäglich eingesetzten Excels.
 
-### 2.3 Variante C wäre machbar — und teurer als die Portierung
+### 3.3 Variante C wäre machbar — und teurer als die Portierung
 
 Ehrlichkeitshalber: Flask *lässt* sich serverless-tauglich umbauen. Nötig wären
 
@@ -106,7 +163,7 @@ stattdessen möglich ist.
 
 ---
 
-## 3. Die Auflösung: Die Analyse läuft im Browser
+## 4. Die Auflösung: Die Analyse läuft im Browser
 
 Wenn der Analysekern per WebAssembly (Pyodide) im Browser läuft, ist Vercel
 nicht nur möglich, sondern die ideale Plattform:
@@ -119,7 +176,7 @@ nicht nur möglich, sondern die ideale Plattform:
 - **Die Download-Frage löst sich auf** — es gibt nichts hochzuladen, wovor eine
   Firma sich schützen müsste
 
-### 3.1 Machbarkeit — geprüft am Code
+### 4.1 Machbarkeit — geprüft am Code
 
 | Prüfpunkt | Befund |
 |---|---|
@@ -139,18 +196,21 @@ nicht nur möglich, sondern die ideale Plattform:
    in Pyodide standardmäßig nicht verfügbar → als optionalen Fallback bauen,
    der ohne Threads einfach ohne Timeout durchläuft.
 
-### 3.2 Risiken
+### 4.2 Risiken — nach der Messung
 
-| Risiko | Einschätzung |
+| Risiko | Stand nach Messung |
 |---|---|
-| Pyodide-Erstladung ~10 MB | Einmalig, danach im Browser-Cache. Vertretbar; Ladebalken zeigt ihn ohnehin |
-| 3–10× langsamer als CPython | Kein Timeout, fremde CPU, Progress-UI existiert bereits. Immer noch besser als ein Serverless-Timeout mitten in der Analyse |
-| Browser-Speichergrenze (praktisch ~2 GB) | Das vorhandene Tier- und Sampling-System (`_select_tier`, `read_only=True` ab Tier 2) ist genau der richtige Hebel — Schwellen ggf. für WASM absenken |
-| Alte Browser / Firmen-IE-Reste | Fallback-Hinweis plus Download-Variante (Abschnitt 4) |
+| Pyodide-Erstladung | **Entschärft.** 14 MB entpackt, Boot 2,0 s, danach im Cache |
+| Langsamer als CPython | **Entschärft.** Gemessen Faktor 1,2–1,6, nicht 3–10 |
+| Browser-Speichergrenze ~2 GB | **Offen bis Etappe 1.** Ohne `read_only` reißt eine 30-MB-Datei die Grenze; mit `read_only` ist sie kein Thema mehr |
+| Heap wächst über die Sitzung | **Neu erkannt.** WASM-Heap schrumpft nie → frischer Worker je Analyse, danach `terminate()` |
+| Analysedauer bei großen Dateien | Real: 40 s bis über 2 Minuten. Im Browser tolerierbar (kein Timeout, Fortschrittsanzeige da), erfordert aber ehrliche Zeitangabe in der UI |
+| Alte oder gesperrte Firmenbrowser | Hinweis plus Download-Variante (Abschnitt 5) |
+
 
 ---
 
-## 4. Was aus dem Download-Wunsch wird
+## 5. Was aus dem Download-Wunsch wird
 
 Drei Zielgruppen, drei Artefakte — in dieser Reihenfolge:
 
@@ -166,11 +226,11 @@ dort ist „installier dir erst Python" bereits das Ende des Gesprächs.
 
 ---
 
-## 5. Brückenvariante B: Wenn der Server trotzdem sein soll
+## 6. Brückenvariante B: Wenn der Server trotzdem sein soll
 
 Falls die WASM-Portierung zu weit weg ist und diese Woche etwas live sein muss:
 **für diesen einen Fall nicht Vercel, sondern Container.** Der Grund ist nicht
-Vercel, sondern die unveränderte Flask-App (siehe 2.2). Fly.io, Railway, Render oder Hetzner mit
+Vercel, sondern die unveränderte Flask-App (siehe 3.2). Fly.io, Railway, Render oder Hetzner mit
 Docker, Region Frankfurt. Der Code bleibt unverändert, SSE funktioniert,
 kein Body-Limit, DSGVO-Hosting geklärt. Aufwand ein bis zwei Tage.
 
@@ -180,18 +240,98 @@ bestehen.
 
 ---
 
-## 6. Reihenfolge
+## 7. Der Plan zum Abarbeiten
 
-| Sprint | Inhalt | Dauer |
-|---|---|---|
-| **1 — Spike** | `engine` auf file-like Input umstellen, Threading-Fallback, Pyodide-Worker aufsetzen, eine echte 20-MB-Datei durchlaufen lassen. **Go/No-Go-Entscheidung an echten Zahlen.** | 2–3 Tage |
-| **2 — Web-App** | Frontend an den Worker hängen (SSE → `postMessage`), Upload-Seite und Report übernehmen, Vercel-Deploy, Domain, Fonts selbst hosten | ~1 Woche |
-| **3 — Distribution** | PWA-Manifest, PyInstaller-.exe, Docker-Image, Release-Pipeline | 3–4 Tage |
-| **4 — Viralität** | Erst jetzt. Die Challenge-Vorlage liegt in `docs/challenge/PLAN.md` bereit | — |
+Sechs Etappen. Jede hat ein überprüfbares Abnahmekriterium — erst wenn das
+erfüllt ist, geht es weiter. Etappe 0 ist erledigt.
+
+### Etappe 0 — Messgrundlage ✅ erledigt
+
+Benchmark-Harness in [`bench/`](../../bench/README.md), Ergebnisse in
+Abschnitt 1. Der Go/No-Go-Spike ist damit vorweggenommen: **openpyxl läuft
+unter Pyodide, der Aufschlag ist klein, die Speichergrenze ist der einzige
+echte Engpass — und der ist lösbar.** Entscheidung: Variante A.
+
+### Etappe 1 — `read_only` scharf schalten
+
+Das Fundament. Nützt Browser, Server und Desktop gleichermaßen und ist
+unabhängig von allem Weiteren wertvoll.
+
+| Schritt | Inhalt |
+|---|---|
+| 1.1 | Die 21 `ws.cell()`-Zugriffe in `rules/structure.py` (10), `rules/formulas.py` (5), `rules/implicit_knowledge.py` (5), `rules/volume.py` (1) auf `iter_rows()` umstellen. Muster liegt in `rules/_sampling.py` |
+| 1.2 | `_select_tier` auf `read_only: True` ab Tier 2 umstellen; Docstring und den veralteten Kommentar in `engine.py:359` korrigieren |
+| 1.3 | Regeln, die zwingend Styles brauchen (`needs_styles`), bleiben auf Tier 1 mit vollem Laden — dort ist die Datei klein genug |
+| 1.4 | Regressionstest: Scores und Findings auf `test_messy.xlsx` und `test_pii.xlsx` müssen vor und nach der Umstellung identisch sein |
+
+**Abnahme:** `bench/bench.py analyze wb_L.xlsx` bleibt unter **300 MB**
+Peak-RSS (heute 3146 MB) bei unveränderten Findings.
+
+### Etappe 2 — Analysekern browserfähig
+
+| Schritt | Inhalt |
+|---|---|
+| 2.1 | `analyze()` und `analyze_with_progress()` akzeptieren ein file-like Objekt statt nur eines Pfads (`engine.py:316–320`, `360`); Dateigröße aus der Puffergröße |
+| 2.2 | Regel-Timeout: Fallback ohne Threads, wenn `threading.Thread` nicht verfügbar ist (`engine.py:606`) |
+| 2.3 | `excel_checker` als reines Wheel bauen — ohne `flask`, `requests`, `dotenv` als harte Abhängigkeit (Extras statt Core-Dependencies in `pyproject.toml`) |
+| 2.4 | Wheel in Pyodide laden und `analyze_with_progress` vollständig durchlaufen lassen |
+
+**Abnahme:** Vollständiger HTML-Report aus `test_messy.xlsx`, erzeugt im
+Browser, inhaltsgleich zum CPython-Report.
+
+### Etappe 3 — Worker und Oberfläche
+
+| Schritt | Inhalt |
+|---|---|
+| 3.1 | Web Worker: Pyodide plus Wheels laden, Fortschritts-Events des Generators per `postMessage` weiterreichen — Ereignisformat bleibt wie beim SSE-Stream |
+| 3.2 | **Frischer Worker je Analyse, danach `terminate()`** (Heap schrumpft nie, siehe 1.3) |
+| 3.3 | `_upload_page.html` von `EventSource` auf Worker umstellen — nur die Ereignisquelle tauschen, die Anzeige bleibt |
+| 3.4 | Report-HTML direkt in den DOM statt über `/report/<id>`; „Als Datei speichern" ersetzt den Download-Endpunkt |
+| 3.5 | Ehrliche Laufzeitangabe in der UI, abgeleitet aus der Dateigröße |
+
+**Abnahme:** Datei per Drag-and-drop → Fortschritt → Report, und im
+Netzwerk-Tab passiert nach dem Seitenaufbau nichts mehr.
+
+### Etappe 4 — Vercel-Deploy
+
+| Schritt | Inhalt |
+|---|---|
+| 4.1 | Pyodide (14 MB) und Wheels selbst ausliefern, nicht per Fremd-CDN |
+| 4.2 | Fonts selbst hosten — `static/theme.css` lädt heute von `rsms.me` und `jsdelivr` |
+| 4.3 | `vercel.json`: Cache-Header für die unveränderlichen Pyodide-Dateien, Security-Header |
+| 4.4 | Domain, `robots.txt`, OG-Meta-Tags |
+
+**Abnahme:** Öffentlich erreichbar; zweiter Aufruf lädt Pyodide aus dem Cache;
+keine Anfrage an einen Drittanbieter-Host.
+
+### Etappe 5 — Distribution
+
+| Schritt | Inhalt |
+|---|---|
+| 5.1 | PWA: Service Worker cached Pyodide und Wheels → offline lauffähig, installierbar |
+| 5.2 | Windows-`.exe` mit PyInstaller: Doppelklick startet den lokalen Server und öffnet den Browser |
+| 5.3 | Docker-Image für IT-Abteilungen |
+| 5.4 | Release-Pipeline, die alle drei aus einem Tag baut |
+
+**Abnahme:** Alle drei Artefakte aus einem Tag gebaut und auf einem Rechner
+ohne vorinstalliertes Python getestet.
+
+### Etappe 6 — Vor der Viralität
+
+Die vier Punkte aus Abschnitt 8. Danach steht die Challenge-Vorlage in
+`docs/challenge/PLAN.md` bereit.
+
+### Reihenfolge-Logik
+
+Etappe 1 vor allem anderen, weil sie den einzigen echten Engpass beseitigt und
+auch dann Wert liefert, wenn die Browser-Variante scheitern sollte. Etappe 2
+und 3 sind die eigentliche Portierung. Etappe 4 ist klein, sobald 3 steht.
+Etappe 5 ist unabhängig und kann parallel laufen.
+
 
 ---
 
-## 7. Vier Dinge, die jetzt eingebaut gehören
+## 8. Vier Dinge, die jetzt eingebaut gehören
 
 Auch bei geparkter Challenge sind diese vier später teuer nachzurüsten:
 
@@ -211,12 +351,15 @@ Auch bei geparkter Challenge sind diese vier später teuer nachzurüsten:
 
 ---
 
-## 8. Erster Schritt
+## 9. Erster Schritt
 
-Sprint 1, Spike. Konkret: `analyze_with_progress` file-like-fähig machen,
-Threading-Timeout optional, minimaler Pyodide-Worker, `test_messy.xlsx` und
-eine echte große Datei durchlaufen lassen, Laufzeit und Speicher messen.
+**Etappe 1.1**: die 21 `ws.cell()`-Zugriffe auf `iter_rows()` umstellen.
 
-Das Ergebnis dieses Spikes entscheidet zwischen „Vercel als statische App"
-(Abschnitt 3) und „Container als Brücke" (Abschnitt 5). Alles andere hängt
-daran.
+Das ist die höchstwirksame Einzeländerung im Projekt — sie senkt den
+Speicherbedarf um etwa den Faktor 60, macht große Dateien im Browser überhaupt
+erst möglich, beschleunigt gleichzeitig die CLI und die Server-Variante, und
+sie ist unabhängig von jeder Entscheidung über Vercel, WASM oder Container
+wertvoll.
+
+Der Go/No-Go-Spike, der hier ursprünglich stand, ist durch die Messungen in
+Abschnitt 1 bereits beantwortet: **Variante A ist tragfähig.**
